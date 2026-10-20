@@ -1,7 +1,8 @@
 /* Trail Narration Engine: the narrator's recording booth.
  *
  * Reads an episode's script.trail, manifest.json and the firefly's clips from Google Drive, records the
- * narrator's takes turn by turn, and saves each take raw (48 kHz, 24-bit mono WAV) with a trail-take/1 sidecar
+ * narrator's takes turn by turn, and saves each take (mono Opus at 160 kbps in an Ogg file, encoded from the raw 48 kHz capture; WAV where the
+ * browser can't encode Opus) with a trail-take/1 sidecar
  * into the episode's recordings/ folder, for the voice notebook. Spec: "Trail Narration Engine Spec" (Claude Doc).
  */
 (() => {
@@ -396,6 +397,97 @@ registerProcessor("tne-tap", Tap);`;
     return new Blob([buf], { type: "audio/wav" });
   }
 
+  // ---------- Opus in Ogg (RFC 7845), from the browser's own encoder ----------
+
+  const OPUS_BITRATE = 160000;
+  const PRE_SKIP = 312;   // libopus's encoder delay at 48 kHz, the usual value; the decoder drops these samples
+
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) { let r = i << 24; for (let k = 0; k < 8; k++) r = (r & 0x80000000) ? ((r << 1) ^ 0x04c11db7) : (r << 1); t[i] = r >>> 0; }
+    return t;
+  })();
+  function oggCrc(bytes) {
+    let c = 0;
+    for (let i = 0; i < bytes.length; i++) c = ((c << 8) ^ CRC_TABLE[((c >>> 24) ^ bytes[i]) & 255]) >>> 0;
+    return c >>> 0;
+  }
+
+  /** Build one Ogg page holding whole `packets`, ending at `granule`. */
+  function oggPage(packets, granule, serial, seq, flags) {
+    const lacing = [];
+    for (const p of packets) { let n = p.length; while (n >= 255) { lacing.push(255); n -= 255; } lacing.push(n); }
+    const size = 27 + lacing.length + packets.reduce((n, p) => n + p.length, 0);
+    const b = new Uint8Array(size), v = new DataView(b.buffer);
+    b.set([0x4f, 0x67, 0x67, 0x53], 0); b[4] = 0; b[5] = flags;
+    v.setUint32(6, Number(BigInt.asUintN(64, BigInt(granule)) & 0xffffffffn), true);
+    v.setUint32(10, Number(BigInt.asUintN(64, BigInt(granule)) >> 32n), true);
+    v.setUint32(14, serial, true); v.setUint32(18, seq, true); v.setUint32(22, 0, true);
+    b[26] = lacing.length; b.set(lacing, 27);
+    let o = 27 + lacing.length;
+    for (const p of packets) { b.set(p, o); o += p.length; }
+    v.setUint32(22, oggCrc(b), true);
+    return b;
+  }
+
+  async function opusSupported(rate) {
+    try {
+      if (typeof AudioEncoder === "undefined") return false;
+      const s = await AudioEncoder.isConfigSupported({ codec: "opus", sampleRate: rate, numberOfChannels: 1, bitrate: OPUS_BITRATE });
+      return !!s.supported;
+    } catch (_) { return false; }
+  }
+
+  /** Encode mono float samples to an Ogg Opus file. */
+  async function oggOpus(samples, rate) {
+    const packets = [];
+    let err = null;
+    const enc = new AudioEncoder({
+      output: chunk => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); packets.push({ b, dur: Math.round(chunk.duration * 48000 / 1e6) }); },
+      error: e => { err = e; },
+    });
+    enc.configure({ codec: "opus", sampleRate: rate, numberOfChannels: 1, bitrate: OPUS_BITRATE, opus: { application: "audio", frameDuration: 20000 } });
+    const step = rate;   // one second per AudioData
+    for (let i = 0; i < samples.length; i += step) {
+      const part = samples.subarray(i, Math.min(samples.length, i + step));
+      const ad = new AudioData({ format: "f32", sampleRate: rate, numberOfFrames: part.length, numberOfChannels: 1,
+        timestamp: Math.round(i / rate * 1e6), data: part.slice(0) });
+      enc.encode(ad); ad.close();
+    }
+    await enc.flush(); enc.close();
+    if (err) throw err;
+
+    const serial = crypto.getRandomValues(new Uint32Array(1))[0];
+    const head = new Uint8Array(19), hv = new DataView(head.buffer);
+    head.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], 0);           // "OpusHead"
+    head[8] = 1; head[9] = 1; hv.setUint16(10, PRE_SKIP, true); hv.setUint32(12, rate, true); hv.setInt16(16, 0, true); head[18] = 0;
+    const vendor = new TextEncoder().encode("Trail Narration Engine");
+    const tags = new Uint8Array(8 + 4 + vendor.length + 4), tv = new DataView(tags.buffer);
+    tags.set([0x4f, 0x70, 0x75, 0x73, 0x54, 0x61, 0x67, 0x73], 0);           // "OpusTags"
+    tv.setUint32(8, vendor.length, true); tags.set(vendor, 12); tv.setUint32(12 + vendor.length, 0, true);
+
+    const pages = [oggPage([head], 0, serial, 0, 0x02), oggPage([tags], 0, serial, 1, 0)];
+    let seq = 2, granule = PRE_SKIP, group = [], segs = 0;
+    const total = PRE_SKIP + Math.round(samples.length * 48000 / rate);
+    for (let k = 0; k < packets.length; k++) {
+      const p = packets[k], need = Math.floor(p.b.length / 255) + 1;
+      if (group.length && (segs + need > 255 || group.length >= 50)) {
+        pages.push(oggPage(group, granule, serial, seq++, 0)); group = []; segs = 0;
+      }
+      group.push(p.b); segs += need; granule += p.dur;
+      if (k === packets.length - 1) pages.push(oggPage(group, Math.min(granule, total), serial, seq++, 0x04));
+    }
+    return new Blob(pages, { type: "audio/ogg" });
+  }
+
+  /** The take as a file: Opus where the browser can encode it, else 24-bit WAV. */
+  async function encodeTake(samples, rate) {
+    if (await opusSupported(rate)) {
+      try { return { blob: await oggOpus(samples, rate), ext: "opus", mime: "audio/ogg" }; } catch (_) {}
+    }
+    return { blob: wav24(samples, rate), ext: "wav", mime: "audio/wav" };
+  }
+
   // ---------- state ----------
 
   let ep = null;          // the open episode
@@ -639,7 +731,7 @@ registerProcessor("tne-tap", Tap);`;
 
   function sidecar(t, turn) {
     const base = { format: "trail-take/1", take: t.takeId, recorded: isoLocal(t.recorded instanceof Date ? t.recorded : new Date(t.recorded)),
-      episode: ep.name, kind: turn.kind, audio: `${t.takeId}.wav` };
+      episode: ep.name, kind: turn.kind, audio: `${t.takeId}.${t.ext || "opus"}` };
     if (turn.kind === "ocarina") base.cue = turn.cueN;
     else base.lines = turn.lines.map(l => l.entry ? { id: l.entry.id, text: l.entry.text } : { text: l.text });
     base.gain_db = t.gain;
@@ -653,16 +745,19 @@ registerProcessor("tne-tap", Tap);`;
     if (!turn) { banner("This take's turn is no longer in the script. Discard it, or reopen the episode it belongs to.", true); return false; }
     if (!ep.demo && !drive.valid()) { signInAgain(() => save(advance)); return false; }
     setMode("saving");
-    const wav = wav24(take.samples, take.rate);
+    $("save").textContent = "Encoding…";
+    const file = await encodeTake(take.samples, take.rate);
+    take.ext = file.ext;
     const side = sidecar(take, turn);
     try {
       if (ep.demo) {
-        const a = $("download"); a.href = URL.createObjectURL(wav); a.download = `${take.takeId}.wav`; a.hidden = false;
+        const a = $("download"); a.href = URL.createObjectURL(file.blob); a.download = `${take.takeId}.${file.ext}`; a.hidden = false;
+        a.textContent = `Download ${file.ext === "opus" ? "Opus" : "WAV"}`;
         await sleep(200);
       } else {
         if (!ep.recordings) ep.recordings = await drive.folder(ep.id, "recordings");
         $("save").textContent = "Uploading 0%";
-        await drive.upload(ep.recordings.id, `${take.takeId}.wav`, wav, "audio/wav", p => { $("save").textContent = `Uploading ${Math.round(p * 100)}%`; });
+        await drive.upload(ep.recordings.id, `${take.takeId}.${file.ext}`, file.blob, file.mime, p => { $("save").textContent = `Uploading ${Math.round(p * 100)}%`; });
         // the sidecar last: the notebook treats a sidecar as a finished take
         await drive.uploadSmall(ep.recordings.id, `${take.takeId}.json`, JSON.stringify(side, null, 1), "application/json");
       }
@@ -681,7 +776,7 @@ registerProcessor("tne-tap", Tap);`;
     take = null;
     setMode("idle");
     if (demoLink) { $("review").hidden = false; $("save").disabled = true; $("discard").disabled = true; }
-    banner(ep.demo ? "Saved in the demo (not to Drive). Download the WAV above to check it." : "Saved to Drive. The notebook picks it up on its next run.");
+    banner(ep.demo ? "Saved in the demo (not to Drive). Download the take above to check it." : "Saved to Drive. The notebook picks it up on its next run.");
     if (advance) {
       const next = ep.turns.findIndex((t, i) => i > sel && needsTake(t));
       select(next >= 0 ? next : sel);
@@ -885,5 +980,5 @@ NARRATOR: That one always helps me think.
   }
 
   boot();
-  window.__tne = { parseScript, attachManifest, buildTurns, norm, wav24, state: () => ({ mode, sel, ep, take }) };
+  window.__tne = { parseScript, attachManifest, buildTurns, norm, wav24, encodeTake, state: () => ({ mode, sel, ep, take }) };
 })();

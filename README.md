@@ -1,6 +1,6 @@
 # Trail Narration Engine
 
-The narrator's recording booth for the trail channel. It reads an episode's script and the firefly's voiced lines from Google Drive, plays the firefly in your headphones as a cue, records your turn raw (48 kHz, 24-bit mono WAV), lets you review it, and saves it with a `trail-take/1` sidecar into the episode's `recordings/` folder for the voice notebook in [`neonms92/hiker-engine`](https://github.com/neonms92/hiker-engine) (`voice/`).
+The narrator's recording booth for the trail channel. It reads an episode's script and the firefly's voiced lines from Google Drive, plays the firefly in your headphones as a cue, records your turn (captured raw at 48 kHz, saved as mono Opus at 160 kbps; 24-bit WAV if the browser can't encode Opus), lets you review it, and saves it with a `trail-take/1` sidecar into the episode's `recordings/` folder for the voice notebook in [`neonms92/hiker-engine`](https://github.com/neonms92/hiker-engine) (`voice/`).
 
 The spec lives in the **Trail Narration Engine Spec** doc. Interface changes (the Drive contract, the sidecar format) land there first, then here and in `hiker-engine/voice/`.
 
@@ -14,7 +14,7 @@ The spec lives in the **Trail Narration Engine Spec** doc. Interface changes (th
 
 Arrow keys move between turns. Click a firefly line in the script to hear it on its own. The **Gain** slider is stored with each take for the mixer; it never changes the recording. A take you haven't saved survives a reload: the page offers it back.
 
-The **Demo** button runs the whole flow with a built-in script and a chirp for the firefly; takes stay in the browser and can be downloaded as WAV. Nothing goes to Drive.
+The **Demo** button runs the whole flow with a built-in script and a chirp for the firefly; takes stay in the browser and can be downloaded. Nothing goes to Drive.
 
 Line states in the script: green recorded, amber saved but not processed yet, orange needs review (you said it differently; see the report), grey not recorded, dashed not voiced yet (added to the script after the last notebook run; you can still record it, and the notebook matches it by text).
 
@@ -38,4 +38,4 @@ The recorder reads files the voice notebook created (the script, the manifest, t
 - Echo cancellation, noise suppression and automatic gain control are switched off, so the take is what the microphone heard.
 - The firefly and the ding play only through your output device. Use headphones, or they land in the take and Whisper hears the firefly as you.
 - The meter shows short-term loudness (3 s, K-weighted, LUFS) with your gain applied, against a band around the firefly's loudness, and a clip light at −1 dBFS on the raw signal. If the clip light trips, lower the microphone's input level; the slider can't fix clipping.
-- A take is about 8.6 MB a minute. Uploads are resumable and show progress; the sidecar is written only after the audio has uploaded.
+- A take is about 1.2 MB a minute as Opus. Opus at 160 kbps is transparent for voice; it's encoded once, from the raw capture, when you save. Uploads are resumable and show progress; the sidecar is written only after the audio has uploaded.
