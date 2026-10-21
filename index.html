@@ -81,9 +81,8 @@ main { overflow: auto; min-height: 0; }
 .flag { border: 0; background: none; padding: 2px 4px; color: color-mix(in srgb, var(--muted) 45%, transparent); display: inline-flex; align-items: center; gap: 6px; align-self: start; }
 .flag[aria-pressed="true"] { color: var(--rec); }
 .item:hover .flag:not([aria-pressed="true"]) { color: var(--muted); }
-.flag.big { border: 1px solid var(--line); background: var(--field); padding: 6px 12px; color: var(--muted); font: 14px var(--ui); }
-.flag.big[aria-pressed="true"] { color: var(--rec); border-color: var(--rec); background: var(--rec-soft); }
-.panel-row { display: flex; gap: 10px; align-items: center; }
+.open-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.open-head .flag { margin-top: 6px; }
 #lines p.claude-line { font-style: italic; color: var(--firefly); }
 .open-turn.claude { border-color: var(--glow); }
 dialog textarea { width: 100%; margin-top: 8px; font: 15px/1.4 var(--ui); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--ink); }

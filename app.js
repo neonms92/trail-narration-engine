@@ -688,14 +688,14 @@ registerProcessor("tne-tap", Tap);`;
   }
 
   const FLAG_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>`;
-  function flagButton(it, big) {
+  function flagButton(it) {
     const b = document.createElement("button");
-    b.type = "button"; b.className = big ? "flag big" : "flag";
+    b.type = "button"; b.className = "flag";
     const on = isFlagged(it);
     b.setAttribute("aria-pressed", String(on));
     b.setAttribute("aria-label", on ? "Flagged: tap to clear" : "Flag for another take");
     b.title = b.getAttribute("aria-label");
-    b.innerHTML = FLAG_SVG + (big ? `<span>${on ? "Flagged" : "Flag"}</span>` : "");
+    b.innerHTML = FLAG_SVG;
     b.addEventListener("click", e => { e.stopPropagation(); toggleFlag(it); });
     return b;
   }
@@ -768,7 +768,7 @@ registerProcessor("tne-tap", Tap);`;
         if (st !== "placeholder") { const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; t.append(s); }
         row.append(dot, t);
       }
-      row.append(flagButton(it, false));
+      row.append(flagButton(it));
       row.classList.toggle("flagged", isFlagged(it));
       row.addEventListener("click", () => select(it.seqIndex));
       row.addEventListener("keydown", e => { if (e.key === "Enter" && mode === "idle") { e.stopPropagation(); row.click(); } });
@@ -807,8 +807,10 @@ registerProcessor("tne-tap", Tap);`;
       if (st === "saved" && sharedTake(it)) note(p, "Saved in one take with the line above. Until the notebook splits it, this line plays its current clip; flag it to record it on its own.");
       if (st === "flagged") note(p, ep.flags[it.entry.id].message + (it.entry.source === "recording" ? " An earlier take is still in use." : ""));
     }
-    box.append(p);
-    const row = document.createElement("div"); row.className = "panel-row"; row.append(flagButton(it, true)); box.append(row);
+    // the same small flag as the other lines, at the top right of the open line
+    const head = document.createElement("div"); head.className = "open-head";
+    head.append(p, flagButton(it));
+    box.append(head);
     const band = cueBand();
     $("band").style.left = `${pct(band.lo)}%`; $("band").style.width = `${pct(band.hi) - pct(band.lo)}%`;
     $("bandInfo").textContent = `firefly ${band.mid.toFixed(0)} LUFS`;
