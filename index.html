@@ -93,6 +93,7 @@ footer { border-top: 1px solid var(--line); background: var(--panel);
   .knobs output { display: none; }
 }
 .transport { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.runon { display: inline-flex; gap: 6px; align-items: center; }
 #big { min-width: 168px; min-height: 64px; font: 700 1.25rem var(--ui); border-radius: 14px; background: var(--moss); color: var(--panel); border-color: var(--moss); }
 #big.recording { background: var(--rec); border-color: var(--rec); }
 #big.listening { background: var(--glow); border-color: var(--glow); color: #1d1606; }
@@ -168,6 +169,8 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
     <button id="big" type="button" disabled>Take</button>
     <button id="retake" type="button" disabled>Retake <kbd>R</kbd></button>
     <span class="sub" id="clock">0:00.0</span>
+    <label class="sub runon"><input type="checkbox" id="runOn" checked> Run on to the next line</label>
+    <span class="sub" id="uploads" aria-live="polite"></span>
   </div>
   <div class="meter">
     <div class="bar" aria-hidden="true"><div class="band" id="band"></div><div class="lvl" id="lvl"></div></div>

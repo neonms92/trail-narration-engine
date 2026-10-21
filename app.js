@@ -70,6 +70,7 @@
       get: (s, k) => run(s, "readonly", st => st.get(k)),
       put: (s, k, v) => run(s, "readwrite", st => st.put(v, k)),
       del: (s, k) => run(s, "readwrite", st => st.delete(k)),
+      keys: s => run(s, "readonly", st => st.getAllKeys()),
     };
   })();
 
@@ -80,6 +81,13 @@
   const drive = {
     token: null, expires: 0, client: null, email: "",
     valid() { return this.token && Date.now() < this.expires - 60000; },
+    /** Seconds of sign-in left (0 when signed out). */
+    left() { return this.token ? Math.max(0, (this.expires - Date.now()) / 1000) : 0; },
+    restore() {
+      const a = local.get("tne.auth", null);
+      if (a && a.token && Date.now() < a.expires - 60000) { this.token = a.token; this.expires = a.expires; return true; }
+      return false;
+    },
     /** Ask Google for a token. Call from a click: it may open a popup. */
     auth() {
       return new Promise((resolve, reject) => {
@@ -92,16 +100,19 @@
           if (resp.error) { reject(new Error(`Google sign-in failed: ${resp.error}`)); return; }
           this.token = resp.access_token;
           this.expires = Date.now() + (Number(resp.expires_in) || 3600) * 1000;
+          // kept so a reload doesn't ask again; Google's tokens last an hour, and there is no refresh token in a browser
+          local.set("tne.auth", { token: this.token, expires: this.expires });
           resolve();
         };
         this.client.error_callback = err => reject(new Error(`Google sign-in was closed (${err && err.type || "cancelled"}).`));
-        this.client.requestAccessToken({ prompt: this.token ? "" : undefined });
+        // once you've agreed, a renewal needs no choices: the popup opens and closes by itself
+        this.client.requestAccessToken({ prompt: this.token || local.get("tne.auth", null) ? "" : undefined });
       });
     },
     async api(url, opts = {}) {
       if (!this.valid()) throw new AuthError("Your Google sign-in has lapsed.");
       const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${this.token}` } });
-      if (r.status === 401) { this.token = null; throw new AuthError("Your Google sign-in has lapsed."); }
+      if (r.status === 401) { this.token = null; local.set("tne.auth", { token: null, expires: 0 }); throw new AuthError("Your Google sign-in has lapsed."); }
       if (!r.ok) {
         let msg = `${r.status}`;
         try { const j = await r.json(); msg = j.error && j.error.message || msg; } catch (_) {}
@@ -340,15 +351,31 @@ registerProcessor("tne-tap", Tap);`;
     ctx: null, stream: null, raw: null, kw: null, cueGain: null, dingGain: null, playing: [],
     chunks: [], recording: false, flushed: null, msWindow: [], peakUntil: 0, recSamples: 0,
     micLabel: "",
-    async open() {
+    /** Playback only: the firefly, the ding, a take under review. Doesn't touch the mic. */
+    async output() {
       if (this.ctx) { if (this.ctx.state === "suspended") await this.ctx.resume(); return; }
       const ctx = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
-      this.stream = await openMic(local.get("tne.mic", ""));
-      this.micLabel = await micName(this.stream);
-      this.stream.getAudioTracks()[0].onended = () => { this.close(); showMic(); banner("The microphone went away (unplugged?). The next take opens it again.", true); };
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
       await ctx.audioWorklet.addModule(url);
-      const src = ctx.createMediaStreamSource(this.stream);
+      this.cueGain = ctx.createGain(); this.cueGain.connect(ctx.destination);
+      this.dingGain = ctx.createGain(); this.dingGain.connect(ctx.destination);
+      this.ctx = ctx;
+      applyVolumes();
+    },
+    /** Playback plus the mic, for a take. The mic is let go again when the take ends. */
+    async open() {
+      await this.output();
+      if (this.stream) return;
+      const ctx = this.ctx;
+      const stream = await openMic(local.get("tne.mic", ""));
+      this.stream = stream;
+      this.micLabel = await micName(stream);
+      stream.getAudioTracks()[0].onended = () => {
+        if (this.stream !== stream) return;
+        this.releaseMic(true); showMic(); banner("The microphone went away (unplugged?). The next take opens it again.", true);
+      };
+      const src = ctx.createMediaStreamSource(stream);
+      this.src = src;
       const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
       // raw tap: the take itself, and the peak light
       this.raw = new AudioWorkletNode(ctx, "tne-tap", { processorOptions: { keep: true }, numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: "explicit" });
@@ -360,10 +387,7 @@ registerProcessor("tne-tap", Tap);`;
       src.connect(shelf).connect(hp).connect(this.kw).connect(sink);
       this.raw.port.onmessage = e => this.onRaw(e.data);
       this.kw.port.onmessage = e => this.onK(e.data);
-      this.cueGain = ctx.createGain(); this.cueGain.connect(ctx.destination);
-      this.dingGain = ctx.createGain(); this.dingGain.connect(ctx.destination);
-      this.ctx = ctx;
-      applyVolumes();
+      this.taps = [src, shelf, hp, this.raw, this.kw, sink];
     },
     onRaw(d) {
       if (d.samples) { this.chunks.push(d.samples); this.recSamples += d.samples.length; }
@@ -380,12 +404,13 @@ registerProcessor("tne-tap", Tap);`;
       const ms = this.msWindow.reduce((a, b) => a + b, 0) / this.msWindow.length;
       return -0.691 + 10 * Math.log10(ms + 1e-12);
     },
-    /** Let go of the mic and the audio graph, so the next take opens the chosen mic afresh. */
-    close() {
-      this.stopPlayback();
+    /** Let go of the mic (the phone's mic light goes off); the next take opens the chosen mic afresh. */
+    releaseMic(force = false) {
+      if (this.recording && !force) return;
       if (this.stream) for (const t of this.stream.getTracks()) { t.onended = null; t.stop(); }
-      if (this.ctx) this.ctx.close().catch(() => {});
-      this.ctx = this.stream = this.raw = this.kw = null; this.micLabel = ""; this.msWindow = [];
+      for (const n of this.taps || []) { try { n.disconnect(); } catch (_) {} }
+      this.stream = this.src = this.raw = this.kw = null; this.taps = [];
+      this.micLabel = ""; this.msWindow = []; this.peakUntil = 0;
     },
     stopPlayback() { for (const s of this.playing) { try { s.onended = null; s.stop(); } catch (_) {} } this.playing = []; },
     play(buffer, offset = 0, gain = this.cueGain) {
@@ -560,6 +585,7 @@ registerProcessor("tne-tap", Tap);`;
   let cancelListen = null;
   let reviewPlayback = false;
 
+  const RENEW_S = 15 * 60;   // renew the Google sign-in at a tap when less than this is left
   const savedKey = () => `tne.saved.${ep.name}`;
 
   function banner(text, bad, action) {
@@ -702,9 +728,11 @@ registerProcessor("tne-tap", Tap);`;
     try { sessionStorage.setItem("tne.phones", "1"); } catch (_) {}
   }
 
-  async function startTake(lead) {
+  async function startTake(lead, tapped = true) {
     if (!ep) return;
     await ensureHeadphones();
+    // a run of takes can outlast the hour a sign-in lasts: renew it now, from this tap, rather than mid-run
+    if (tapped && !ep.demo && drive.left() < RENEW_S) { try { await drive.auth(); } catch (_) {} }
     try { await audio.open(); } catch (e) {
       banner(e && e.name === "NotAllowedError" ? "The microphone is blocked. Allow it for this site in the browser, then try again." : `Couldn't open the microphone: ${e.message || e}`, true);
       return;
@@ -727,7 +755,8 @@ registerProcessor("tne-tap", Tap);`;
     cancelListen = null;
     await audio.ding();
     audio.startRecording();
-    take = { turnKey: t.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value), mic: audio.micLabel };
+    take = { turnKey: t.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value), mic: audio.micLabel,
+      fresh: needsTake(t) };   // a first take runs on to the next line; a retake of a recorded one stops for review
     setMode("recording");
   }
 
@@ -737,8 +766,98 @@ registerProcessor("tne-tap", Tap);`;
     await sleep(TAIL_S * 1000);
     take.samples = await audio.stopRecording();
     take.takeId = newTakeId(take.recorded);
+    audio.releaseMic(); showMic();
+    if (take.fresh && $("runOn").checked) {
+      const t = take; take = null;
+      await queueUpload(t);
+      setMode("idle");
+      const next = ep.turns.findIndex((x, i) => i > sel && needsTake(x));
+      if (next < 0) { select(sel); banner("That's the last line still to record."); return; }
+      select(next);
+      return startTake(false, false);   // the next line's firefly cue, the ding, and recording
+    }
     await idb.put("pending", "current", { ...take, episode: ep.name, episodeId: ep.id, recorded: take.recorded.toISOString() });
     enterReview();
+  }
+
+  // ---------- uploads that run behind the next take ----------
+  // Each waiting take is kept in IndexedDB until its sidecar is on Drive, so a reload or a lapsed sign-in loses nothing.
+
+  const uploads = { list: [], busy: false, pct: 0 };
+
+  async function queueUpload(t) {
+    const turn = ep.turns.find(x => x.key === t.turnKey);
+    if (!turn) return;
+    t.ep = ep; t.turn = turn;
+    const keys = turn.kind === "ocarina" ? [turn.key] : turn.lines.map(lineKey);
+    for (const k of keys) ep.saved[k] = t.takeId;   // shown as saved now; written to this browser's list once it's on Drive
+    if (!ep.demo) await idb.put("pending", `q:${t.takeId}`, { samples: t.samples, rate: t.rate, turnKey: t.turnKey, takeId: t.takeId,
+      recorded: t.recorded.toISOString(), gain: t.gain, mic: t.mic, episode: ep.name, episodeId: ep.id });
+    uploads.list.push(t);
+    renderRail();
+    pumpUploads();
+  }
+
+  function showUploads() {
+    const n = uploads.list.length, el = $("uploads");
+    el.textContent = !n ? "" : uploads.busy ? `Uploading ${n} take${n > 1 ? "s" : ""}… ${Math.round(uploads.pct * 100)}%` : `${n} take${n > 1 ? "s" : ""} waiting to upload`;
+  }
+
+  async function pumpUploads() {
+    if (uploads.busy || !uploads.list.length) { showUploads(); return; }
+    uploads.busy = true;
+    while (uploads.list.length) {
+      const t = uploads.list[0];
+      uploads.pct = 0; showUploads();
+      try {
+        if (!t.ep.demo && !drive.valid()) throw new AuthError("Your Google sign-in has lapsed.");
+        await persistTake(t, t.turn, t.ep, p => { uploads.pct = p; showUploads(); });
+      } catch (e) {
+        uploads.busy = false; showUploads();
+        if (e instanceof AuthError) signInAgain(pumpUploads);
+        else banner(`A take didn't upload (${e.message}). It's kept in this browser.`, true, { label: "Try again", run: () => { banner(""); pumpUploads(); } });
+        return;
+      }
+      uploads.list.shift();
+      local.set(`tne.saved.${t.ep.name}`, t.ep.saved);
+      if (!t.ep.demo) await idb.del("pending", `q:${t.takeId}`);
+      if (ep === t.ep) renderRail();
+    }
+    uploads.busy = false; showUploads();
+  }
+
+  /** Takes left waiting by a reload or a closed tab, for this episode: queue them again. */
+  async function resumeUploads() {
+    if (!ep || ep.demo) return;
+    const keys = ((await idb.keys("pending")) || []).filter(k => typeof k === "string" && k.startsWith("q:"));
+    let n = 0;
+    for (const k of keys) {
+      if (uploads.list.some(t => `q:${t.takeId}` === k)) continue;
+      const p = await idb.get("pending", k);
+      if (!p || p.episodeId !== ep.id) continue;
+      const turn = ep.turns.find(x => x.key === p.turnKey);
+      if (!turn) continue;
+      uploads.list.push({ ...p, recorded: new Date(p.recorded), ep, turn });
+      n++;
+    }
+    if (n) { banner(`Uploading ${n} take${n > 1 ? "s" : ""} left from last time.`); pumpUploads(); }
+  }
+
+  /** Encode a take and put it on Drive (the audio, then its sidecar), or offer it as a download in the demo. */
+  async function persistTake(t, turn, e, progress) {
+    const file = await encodeTake(t.samples, t.rate);
+    t.ext = file.ext;
+    const side = sidecar(t, turn, e);
+    if (e.demo) {
+      const a = $("download"); a.href = URL.createObjectURL(file.blob); a.download = `${t.takeId}.${file.ext}`;
+      a.textContent = `Download ${file.ext === "opus" ? "Opus" : "WAV"}`;
+      await sleep(200);
+      return;
+    }
+    if (!e.recordings) e.recordings = await drive.folder(e.id, "recordings");
+    await drive.upload(e.recordings.id, `${t.takeId}.${file.ext}`, file.blob, file.mime, progress);
+    // the sidecar last: the notebook treats a sidecar as a finished take
+    await drive.uploadSmall(e.recordings.id, `${t.takeId}.json`, JSON.stringify(side, null, 1), "application/json");
   }
 
   function enterReview() {
@@ -767,7 +886,7 @@ registerProcessor("tne-tap", Tap);`;
   async function playReview() {
     if (!take) return;
     if (reviewPlayback) { audio.stopPlayback(); reviewPlayback = false; $("playTake").textContent = "Play take"; return; }
-    await audio.open();
+    await audio.output();
     reviewPlayback = true; $("playTake").textContent = "Stop";
     const t = ep.turns.find(x => x.key === take.turnKey);
     try {
@@ -787,14 +906,14 @@ registerProcessor("tne-tap", Tap);`;
   async function playCueOnly(item) {
     if (mode !== "idle" && mode !== "review") return;
     try {
-      await audio.open();
+      await audio.output();
       audio.stopPlayback();
       const b = await fireflyBuffer(item.entry || { text: item.text, clip: "" });
       if (b) await audio.play(b);
     } catch (e) { if (e instanceof AuthError) signInAgain(); else banner(`Couldn't play that line: ${e.message || e}`, true); }
   }
 
-  function sidecar(t, turn) {
+  function sidecar(t, turn, ep) {
     const base = { format: "trail-take/1", take: t.takeId, recorded: isoLocal(t.recorded instanceof Date ? t.recorded : new Date(t.recorded)),
       episode: ep.name, kind: turn.kind, audio: `${t.takeId}.${t.ext || "opus"}` };
     if (turn.kind === "ocarina") base.cue = turn.cueN;
@@ -812,21 +931,9 @@ registerProcessor("tne-tap", Tap);`;
     if (!ep.demo && !drive.valid()) { signInAgain(() => save(advance)); return false; }
     setMode("saving");
     $("save").textContent = "Encoding…";
-    const file = await encodeTake(take.samples, take.rate);
-    take.ext = file.ext;
-    const side = sidecar(take, turn);
     try {
-      if (ep.demo) {
-        const a = $("download"); a.href = URL.createObjectURL(file.blob); a.download = `${take.takeId}.${file.ext}`; a.hidden = false;
-        a.textContent = `Download ${file.ext === "opus" ? "Opus" : "WAV"}`;
-        await sleep(200);
-      } else {
-        if (!ep.recordings) ep.recordings = await drive.folder(ep.id, "recordings");
-        $("save").textContent = "Uploading 0%";
-        await drive.upload(ep.recordings.id, `${take.takeId}.${file.ext}`, file.blob, file.mime, p => { $("save").textContent = `Uploading ${Math.round(p * 100)}%`; });
-        // the sidecar last: the notebook treats a sidecar as a finished take
-        await drive.uploadSmall(ep.recordings.id, `${take.takeId}.json`, JSON.stringify(side, null, 1), "application/json");
-      }
+      await persistTake(take, turn, ep, p => { $("save").textContent = `Uploading ${Math.round(p * 100)}%`; });
+      if (ep.demo) $("download").hidden = false;
     } catch (e) {
       $("save").innerHTML = "Save to Drive <kbd>Enter</kbd>";
       setMode("review");
@@ -909,6 +1016,7 @@ registerProcessor("tne-tap", Tap);`;
     banner("");
     await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false });
     local.set("tne.episode", id);
+    resumeUploads();
   }
 
   async function setEpisode(e) {
@@ -1000,13 +1108,13 @@ NARRATOR: That one always helps me think.
   function boot() {
     $("mic").addEventListener("change", () => {
       local.set("tne.mic", $("mic").value);
-      if (audio.ctx) audio.close();   // idle or review only (the picker is disabled otherwise); a take in review is kept
+      audio.releaseMic();   // idle or review only (the picker is disabled otherwise); a take in review is kept
       showMic();
     });
     try {
       navigator.mediaDevices.addEventListener("devicechange", () => {
         // plugged in or out between takes: reopen on the next take, so Automatic finds the headset
-        if (audio.ctx && (mode === "idle" || mode === "review") && !local.get("tne.mic", "")) audio.close();
+        if (audio.stream && (mode === "idle" || mode === "review") && !local.get("tne.mic", "")) audio.releaseMic();
         showMic();
       });
     } catch (_) {}
@@ -1051,11 +1159,19 @@ NARRATOR: That one always helps me think.
         e.preventDefault(); select(sel + (e.key === "ArrowDown" ? 1 : -1));
       }
     });
-    window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "saving") { e.preventDefault(); e.returnValue = ""; } });
+    window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "saving" || uploads.list.length) { e.preventDefault(); e.returnValue = ""; } });
     setInterval(meter, 100);
     setMode("idle");
     if (!CFG.clientId) $("signin").title = "Set clientId in config.js to sign in";
+    const runOn = local.get("tne.runOn", true);
+    $("runOn").checked = runOn;
+    $("runOn").addEventListener("change", () => local.set("tne.runOn", $("runOn").checked));
     checkPending();
+    if (CFG.clientId && drive.restore()) {
+      // signed in within the hour: carry on without asking
+      $("signin").textContent = "Signed in"; $("signin").disabled = true;
+      loadEpisodeList().catch(e => { if (e instanceof AuthError) { $("signin").textContent = "Sign in with Google"; $("signin").disabled = false; } banner(e.message || String(e), true); });
+    }
   }
 
   boot();
