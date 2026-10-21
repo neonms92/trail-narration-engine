@@ -1,7 +1,7 @@
 /* Trail Narration Engine: the narrator's recording booth.
  *
  * Reads an episode's script.trail, manifest.json and the firefly's clips from Google Drive, records the
- * narrator's takes turn by turn, and saves each take (mono Opus at 160 kbps in an Ogg file, encoded from the raw 48 kHz capture; WAV where the
+ * narrator's takes line by line (the lines flagged for one), and saves each take (mono Opus at 160 kbps in an Ogg file, encoded from the raw 48 kHz capture; WAV where the
  * browser can't encode Opus) with a trail-take/1 sidecar
  * into the episode's recordings/ folder, for the voice notebook. Spec: "Trail Narration Engine Spec" (Claude Doc).
  */
@@ -15,7 +15,7 @@
   const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
   const RATE = 48000;
   const TAIL_S = 0.4;          // keep recording this long after Done
-  const LEAD_S = 3;            // retake lead-up: the last seconds of the firefly's cue
+  const LEAD_S = 3;            // record lead-up: the last seconds of the line before
   const CLIP_PEAK = 0.891;     // -1 dBFS
   const $ = id => document.getElementById(id);
 
@@ -169,6 +169,12 @@
         x.send(blob);
       });
     },
+    /** Write a small text file: replace its content when `id` is given, else create it. */
+    async putText(parent, name, text, mime, id) {
+      if (!id) return this.uploadSmall(parent, name, text, mime);
+      const r = await this.api(`${UPLOAD}/files/${id}?uploadType=media&fields=id`, { method: "PATCH", headers: { "Content-Type": mime }, body: text });
+      return r.json();
+    },
     async uploadSmall(parent, name, data, mime) {
       const b = "tne" + Math.random().toString(16).slice(2);
       const head = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [parent] })}\r\n--${b}\r\nContent-Type: ${mime}\r\n\r\n`;
@@ -215,31 +221,6 @@
     }
   }
 
-  /** Turns: runs of narrator lines between the firefly's lines, section headers and ocarina songs. */
-  function buildTurns(items) {
-    const turns = [];
-    let cur = null, prevSpoken = null;
-    const close = () => { if (cur) { turns.push(cur); cur = null; } };
-    for (const it of items) {
-      if (it.type === "section") { close(); continue; }
-      if (it.type === "ocarina") {
-        close();
-        turns.push({ kind: "ocarina", cueN: it.cue, lines: [], cue: prevSpoken && prevSpoken.speaker === "claude" ? prevSpoken : null, key: `cue:${it.cue}`, item: it });
-        it.turn = turns[turns.length - 1];
-        prevSpoken = null;
-        continue;
-      }
-      if (it.speaker === "claude") { close(); prevSpoken = it; continue; }
-      if (!cur) cur = { kind: "lines", lines: [], cue: prevSpoken && prevSpoken.speaker === "claude" ? prevSpoken : null };
-      cur.lines.push(it);
-      it.turn = cur;
-      prevSpoken = it;
-    }
-    close();
-    for (const t of turns) if (t.kind === "lines") t.key = t.lines[0].entry ? t.lines[0].entry.id : "t:" + norm(t.lines[0].text);
-    return turns;
-  }
-
   const lineKey = l => l.entry ? l.entry.id : "t:" + norm(l.text);
 
   /** Lines whose latest take the notebook couldn't use: {line id: {take, message}}. A later take that worked clears it. */
@@ -270,14 +251,13 @@
     if (l.entry.source === "recording") return l.entry.needs_review ? "review" : "recorded";
     return "placeholder";
   }
-  function cueState(t) {
-    const saved = ep.saved[t.key];
+  function cueState(it) {
+    const saved = ep.saved[it.key];
     const processed = saved && ep.manifest.takes && ep.manifest.takes[saved];
     if (saved && !processed) return "saved";
-    return (ep.manifest.cues || []).some(c => c.cue === t.cueN) ? "recorded" : "placeholder";
+    return (ep.manifest.cues || []).some(c => c.cue === it.cue) ? "recorded" : "placeholder";
   }
   const STATE_LABEL = { flagged: "flagged by the notebook: take it again", recorded: "recorded", saved: "saved, not processed yet", review: "needs review", placeholder: "not recorded", unvoiced: "not voiced yet: run the notebook" };
-  const needsTake = t => t.kind === "ocarina" ? cueState(t) === "placeholder" : t.lines.some(l => ["placeholder", "unvoiced", "flagged"].includes(lineState(l)));
 
   // ---------- audio ----------
 
@@ -432,7 +412,7 @@ registerProcessor("tne-tap", Tap);`;
       this.stream = this.src = this.raw = this.kw = null; this.taps = [];
       this.micLabel = ""; this.msWindow = []; this.peakUntil = 0;
     },
-    stopPlayback() { for (const s of this.playing) { try { s.onended = null; s.stop(); } catch (_) {} } this.playing = []; },
+    stopPlayback() { for (const s of [...this.playing]) { try { s.stop(); } catch (_) {} } },   // their play() promises resolve
     play(buffer, offset = 0, gain = this.cueGain) {
       return new Promise(res => {
         const s = this.ctx.createBufferSource();
@@ -448,6 +428,23 @@ registerProcessor("tne-tap", Tap);`;
       g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.6, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.32);
       o.connect(g).connect(this.dingGain); o.start(t); o.stop(t + 0.34);
       return new Promise(res => { o.onended = res; });
+    },
+    /** A short, happy arpeggio, generated: the end of a record run. */
+    jingle() {
+      if (!this.ctx) return Promise.resolve();
+      const ctx = this.ctx, t0 = ctx.currentTime + 0.05, notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+      let end = t0;
+      notes.forEach((f, i) => {
+        const t = t0 + i * 0.09, len = i === notes.length - 1 ? 0.7 : 0.28;
+        for (const [type, mult, amp] of [["triangle", 1, 0.32], ["sine", 2, 0.08]]) {
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.type = type; o.frequency.setValueAtTime(f * mult, t);
+          g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp, t + 0.012); g.gain.exponentialRampToValueAtTime(0.0005, t + len);
+          o.connect(g).connect(this.dingGain); o.start(t); o.stop(t + len + 0.02);
+        }
+        end = Math.max(end, t + len);
+      });
+      return sleep((end - ctx.currentTime) * 1000 + 50);
     },
     startRecording() {
       this.chunks = []; this.recSamples = 0; this.recording = true;
@@ -599,11 +596,10 @@ registerProcessor("tne-tap", Tap);`;
   // ---------- state ----------
 
   let ep = null;          // the open episode
-  let sel = 0;            // selected turn index
-  let mode = "idle";      // idle | listening | recording | finishing | review | saving
-  let take = null;        // the take under review: {samples, rate, turnKey, takeId, recorded, gain}
-  let cancelListen = null;
-  let reviewPlayback = false;
+  let sel = 0;            // index into ep.seq: the selected line (firefly or narrator) or ocarina song
+  let mode = "idle";      // idle | playing | listening | recording | finishing
+  let run = null;         // the play or record run under way: {kind, cancelled, done}
+  let take = null;        // the take being recorded: {key, rate, recorded, gain, mic}
 
   const RENEW_S = 15 * 60;   // renew the Google sign-in at a tap when less than this is left
   const savedKey = () => `tne.saved.${ep.name}`;
@@ -621,126 +617,200 @@ registerProcessor("tne-tap", Tap);`;
   }
 
   function signInAgain(then) {
-    banner("Your Google sign-in has lapsed. Your take is safe here.", true, {
+    banner("Your Google sign-in has lapsed. Your takes are safe here.", true, {
       label: "Sign in again", run: async () => { try { await drive.auth(); banner(""); then && then(); } catch (e) { banner(e.message, true); } },
     });
   }
 
-  // ---------- rendering ----------
+  // ---------- flags ----------
+  // A flag marks a line for another take. On a narrator line (or ocarina song) it's yours to record; on a firefly line
+  // it asks the notebook for a new Breeze take, with your note as direction. Narrator lines start flagged when they
+  // have no take yet or the notebook couldn't use their last one; flags you set or clear yourself live in the
+  // episode's flags.json on Drive, so every device sees them and the notebook can act on the firefly's.
 
-  /** Where a narrator line's (or ocarina song's) own audio is: a clip the notebook cut, or a saved take it hasn't seen yet. */
-  function mineSource(l) {
-    const st = lineState(l);
-    if (st === "saved") return { take: ep.saved[lineKey(l)] };
-    if (st === "flagged") return { take: ep.flags[l.entry.id].take };   // hear what the notebook heard
-    if ((st === "recorded" || st === "review") && l.entry.clip) return { entry: l.entry };
-    return null;
+  const isClaude = it => it.type === "line" && it.speaker === "claude";
+  function autoFlag(it) {
+    if (it.type === "ocarina") return cueState(it) === "placeholder";
+    return ["placeholder", "unvoiced", "flagged"].includes(lineState(it));
   }
-  function cueSource(t) {
-    const st = cueState(t);
-    if (st === "saved") return { take: ep.saved[t.key] };
-    const c = (ep.manifest.cues || []).find(c => c.cue === t.cueN);
-    return st === "recorded" && c && c.clip ? { entry: c } : null;
+  function isFlagged(it) {
+    const u = ep.userFlags[it.key];
+    if (isClaude(it)) return !!(u && u.flag);
+    if (u && typeof u.flag === "boolean") return u.flag;
+    return autoFlag(it);
   }
-  function mineButton(src, cls, label) {
-    const b = document.createElement("button"); b.type = "button"; b.className = cls;
-    b.setAttribute("aria-label", label); b.title = label;
-    b.textContent = cls === "mine" ? "▶ Play my take" : "▶";
-    b.addEventListener("click", e => { e.stopPropagation(); playMine(src); });
+  const canRecord = it => !!it && !isClaude(it) && isFlagged(it);
+
+  /** Set (val) or clear (null) one line's entry in flags.json: re-read first, so flags set elsewhere survive. */
+  function saveFlag(key, val) {
+    if (val) ep.userFlags[key] = val; else delete ep.userFlags[key];
+    if (ep.demo) { local.set("tne.demoFlags", ep.userFlags); return; }
+    const e = ep;
+    e.flagWrite = (e.flagWrite || Promise.resolve()).then(async () => {
+      const f = await drive.child(e.id, "flags.json");
+      let data = { format: "trail-flags/1", lines: {} };
+      if (f) { try { const d = JSON.parse(await drive.text(f.id)); if (d && d.format === "trail-flags/1" && d.lines) data = d; } catch (_) {} }
+      if (val) data.lines[key] = val; else delete data.lines[key];
+      await drive.putText(e.id, "flags.json", JSON.stringify(data, null, 1), "application/json", f && f.id);
+    }).catch(err => {
+      if (err instanceof AuthError) signInAgain(() => saveFlag(key, val));
+      else banner(`Couldn't save the flag to Drive: ${err.message}`, true);
+    });
+  }
+
+  function askNote(it) {
+    return new Promise(res => {
+      const d = $("flagDlg");
+      $("flagLine").textContent = it.text.replace(/\*/g, "");
+      $("flagNote").value = "";
+      $("flagOk").onclick = () => { d.close(); res($("flagNote").value.trim()); };
+      $("flagCancel").onclick = () => { d.close(); res(null); };
+      d.onclose = () => res(null);
+      d.showModal();
+      $("flagNote").focus();
+    });
+  }
+
+  async function toggleFlag(it) {
+    if (!ep) return;
+    if (isClaude(it)) {
+      if (isFlagged(it)) saveFlag(it.key, null);
+      else {
+        const note = await askNote(it);
+        if (note === null) return;
+        saveFlag(it.key, { flag: true, note, at: isoLocal(new Date()) });
+      }
+    } else {
+      const want = !isFlagged(it);
+      saveFlag(it.key, want === autoFlag(it) ? null : { flag: want, at: isoLocal(new Date()) });
+    }
+    renderRail(); renderTurn(); setMode(mode);
+  }
+
+  const FLAG_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>`;
+  function flagButton(it, big) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = big ? "flag big" : "flag";
+    const on = isFlagged(it);
+    b.setAttribute("aria-pressed", String(on));
+    b.setAttribute("aria-label", on ? "Flagged: tap to clear" : "Flag for another take");
+    b.title = b.getAttribute("aria-label");
+    b.innerHTML = FLAG_SVG + (big ? `<span>${on ? "Flagged" : "Flag"}</span>` : "");
+    b.addEventListener("click", e => { e.stopPropagation(); toggleFlag(it); });
     return b;
   }
 
-  /** The script as one list. The selected turn opens in place: its lines large, then the review of a take. */
+  // ---------- what each line sounds like now ----------
+
+  /** The audio a line plays: a firefly clip; for the narrator, his newest take (raw, while the notebook hasn't seen it),
+      else the clip in use (his recording, or the placeholder voice); an ocarina song's take or clip. */
+  function itemSource(it) {
+    if (it.type === "ocarina") {
+      const saved = ep.saved[it.key], processed = saved && ep.manifest.takes && ep.manifest.takes[saved];
+      if (saved && !processed) return { take: saved };
+      const c = (ep.manifest.cues || []).find(c => c.cue === it.cue);
+      return c && c.clip ? { entry: c } : null;
+    }
+    if (isClaude(it)) return { entry: it.entry || { text: it.text, clip: "" } };
+    if (lineState(it) === "saved") return { take: ep.saved[it.key] };
+    if (it.entry && it.entry.clip && !ep.demo) return { entry: it.entry };
+    return null;
+  }
+  async function bufferFor(it) {
+    const src = itemSource(it);
+    if (!src) return null;
+    return src.take ? takeBuffer(src.take) : fireflyBuffer(src.entry);
+  }
+
+  // ---------- rendering ----------
+
+  /** The script as one list. The selected line opens in place, large, with its flag. */
   function renderRail() {
     const rail = $("rail"), pool = $("pool");
-    pool.append($("lines"), $("review"));   // keep them in the document while the list is rebuilt
+    pool.append($("lines"));   // keep it in the document while the list is rebuilt
     rail.textContent = "";
     if (!ep) return;
-    const cur = ep.turns[sel];
+    const cur = ep.seq[sel];
     let panel = null;
     for (const it of ep.items) {
       if (it.type === "section") {
         const h = document.createElement("div"); h.className = "sec"; h.textContent = it.title; rail.append(h); continue;
       }
-      if (cur && it.type !== "section" && it.speaker !== "claude" && it.turn === cur) {
-        if (!panel) {
-          panel = document.createElement("div"); panel.className = "open-turn"; panel.id = "openTurn";
-          panel.append($("lines"), $("review"));
-          rail.append(panel);
-        }
+      if (it.seqIndex === undefined) continue;
+      if (it === cur) {
+        panel = document.createElement("div"); panel.className = "open-turn" + (isClaude(it) ? " claude" : ""); panel.id = "openTurn";
+        panel.append($("lines"));
+        rail.append(panel);
         continue;
       }
       const row = document.createElement("div");
-      if (it.type === "ocarina") {
-        const t = it.turn, st = cueState(t);
-        row.className = "item"; row.tabIndex = 0;
-        row.innerHTML = `<span class="dot ${st}"></span><span class="t"></span>`;
-        row.querySelector(".t").textContent = `Ocarina song ${t.cueN}`;
-        const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; row.querySelector(".t").append(s);
-        const src = cueSource(t); if (src) row.append(mineButton(src, "play me", "Play my take"));
-        row.addEventListener("click", () => select(ep.turns.indexOf(t)));
-      } else if (it.speaker === "claude") {
-        row.className = "item claude" + (cur && cur.cue === it ? " cue-sel" : "");
-        const b = document.createElement("button"); b.className = "play"; b.type = "button"; b.textContent = "▶";
-        b.setAttribute("aria-label", "Play the firefly's line");
-        b.addEventListener("click", async e => { e.stopPropagation(); await playCueOnly(it); });
-        const t = document.createElement("span"); t.className = "t"; t.textContent = it.text.replace(/\*/g, "");
-        row.append(b, t);
+      row.tabIndex = 0;
+      const t = document.createElement("span"); t.className = "t";
+      if (isClaude(it)) {
+        row.className = "item claude";
+        const m = document.createElement("span"); m.className = "spark"; m.setAttribute("aria-hidden", "true"); m.textContent = "✦";
+        t.textContent = it.text.replace(/\*/g, "");
+        if (isFlagged(it)) { const s = document.createElement("span"); s.className = "state"; s.textContent = "flagged for a new take"; t.append(s); }
+        row.append(m, t);
       } else {
-        const st = lineState(it);
-        row.className = "item"; row.tabIndex = 0;
-        row.innerHTML = `<span class="dot ${st}"></span><span class="t"></span>`;
-        row.querySelector(".t").textContent = it.text.replace(/\*/g, "");
-        if (st !== "placeholder") { const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; row.querySelector(".t").append(s); }
-        const src = mineSource(it); if (src) row.append(mineButton(src, "play me", "Play my take"));
-        row.addEventListener("click", () => select(ep.turns.indexOf(it.turn)));
+        const st = it.type === "ocarina" ? cueState(it) : lineState(it);
+        row.className = "item";
+        const dot = document.createElement("span"); dot.className = `dot ${st}`;
+        t.textContent = it.type === "ocarina" ? `Ocarina song ${it.cue}` : it.text.replace(/\*/g, "");
+        if (st !== "placeholder") { const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; t.append(s); }
+        row.append(dot, t);
       }
-      row.addEventListener("keydown", e => { if (e.key === "Enter" && row.tabIndex === 0 && mode === "idle") { e.stopPropagation(); row.click(); } });
+      row.append(flagButton(it, false));
+      row.classList.toggle("flagged", isFlagged(it));
+      row.addEventListener("click", () => select(it.seqIndex));
+      row.addEventListener("keydown", e => { if (e.key === "Enter" && mode === "idle") { e.stopPropagation(); row.click(); } });
       rail.append(row);
     }
-    // bring the open turn into view, with the firefly's line above it when there is one
-    const cueRow = rail.querySelector(".item.cue-sel");
-    const target = cueRow || panel;
     // only when the recorder moved the selection: never in answer to a tap, or to an upload finishing
-    if (target && scrollToSel) { scrollToSel = false; requestAnimationFrame(() => target.scrollIntoView({ block: "start", behavior: "smooth" })); }
+    if (panel && scrollToSel) { scrollToSel = false; requestAnimationFrame(() => panel.scrollIntoView({ block: "center", behavior: "smooth" })); }
   }
 
+  function note(box, text) { const n = document.createElement("span"); n.className = "note"; n.textContent = text; box.append(n); }
+
   function renderTurn() {
-    const t = ep && ep.turns[sel];
+    const it = ep && ep.seq[sel];
     $("welcome").hidden = !!ep;
-    $("lines").hidden = !t;
-    if (!t) return;
+    $("lines").hidden = !it;
+    if (!it) return;
     const box = $("lines"); box.textContent = "";
-    if (t.kind === "ocarina") {
-      const p = document.createElement("p"); p.textContent = `Ocarina song ${t.cueN}. Play it through, then press Done.`;
-      const st = document.createElement("span"); st.className = "st"; st.textContent = STATE_LABEL[cueState(t)]; p.append(st);
-      const src = cueSource(t); if (src) p.append(document.createElement("br"), mineButton(src, "mine", "Play my take"));
-      box.append(p);
+    const p = document.createElement("p");
+    const lab = document.createElement("span"); lab.className = "st";
+    if (isClaude(it)) {
+      p.className = "claude-line";
+      p.textContent = it.text.replace(/\*/g, "");
+      lab.textContent = "Firefly"; p.append(lab);
+      const u = ep.userFlags[it.key];
+      if (u && u.flag) note(p, u.note ? `Flagged for a new take: “${u.note}”` : "Flagged for a new take (no note: a fresh seed only).");
+      else if (it.entry && it.entry.note) { const n = document.createElement("span"); n.className = "st"; n.textContent = `Direction note: “${it.entry.note}”`; p.append(n); }
+    } else if (it.type === "ocarina") {
+      p.textContent = `Ocarina song ${it.cue}. Play it through, then press Done.`;
+      lab.textContent = STATE_LABEL[cueState(it)]; p.append(lab);
+    } else {
+      p.textContent = it.text.replace(/\*/g, "");
+      const st = lineState(it);
+      lab.textContent = STATE_LABEL[st]; p.append(lab);
+      if (st === "review" && it.entry.spoken) note(p, `Last take said: “${it.entry.spoken}”`);
+      if (st === "unvoiced") note(p, "Not in the manifest yet; run the voice notebook so this line gets its id.");
+      if (st === "flagged") note(p, ep.flags[it.entry.id].message + (it.entry.source === "recording" ? " An earlier take is still in use." : ""));
     }
-    for (const l of t.lines) {
-      const p = document.createElement("p");
-      p.textContent = l.text.replace(/\*/g, "");
-      const st = lineState(l);
-      const lab = document.createElement("span"); lab.className = "st"; lab.textContent = STATE_LABEL[st]; p.append(lab);
-      if (st === "review" && l.entry.spoken) { const n = document.createElement("span"); n.className = "note"; n.textContent = `Last take said: “${l.entry.spoken}”`; p.append(n); }
-      if (st === "unvoiced") { const n = document.createElement("span"); n.className = "note"; n.textContent = "Not in the manifest yet; run the voice notebook so this line gets its id."; p.append(n); }
-      if (st === "flagged") {
-        const n = document.createElement("span"); n.className = "note";
-        n.textContent = ep.flags[l.entry.id].message + (l.entry.source === "recording" ? " An earlier take is still in use." : "");
-        p.append(n);
-      }
-      const src = mineSource(l); if (src) p.append(mineButton(src, "mine", "Play my take"));
-      box.append(p);
-    }
-    const band = cueBand(t);
+    box.append(p);
+    const row = document.createElement("div"); row.className = "panel-row"; row.append(flagButton(it, true)); box.append(row);
+    const band = cueBand();
     $("band").style.left = `${pct(band.lo)}%`; $("band").style.width = `${pct(band.hi) - pct(band.lo)}%`;
     $("bandInfo").textContent = `firefly ${band.mid.toFixed(0)} LUFS`;
   }
 
   const LMIN = -45, LMAX = -5;
   const pct = l => Math.max(0, Math.min(100, (l - LMIN) / (LMAX - LMIN) * 100));
-  function cueBand(t) {
-    const e = t && t.cue && t.cue.entry;
+  /** The level band: the firefly's loudness at the nearest firefly line before the selection. */
+  function cueBand() {
+    let e = null;
+    if (ep) for (let k = sel; k >= 0; k--) { const it = ep.seq[k]; if (it && isClaude(it) && it.entry) { e = it.entry; break; } }
     const mid = e && typeof e.lufs === "number" ? e.lufs : -20;
     return { mid, lo: mid - 3, hi: mid + 3 };
   }
@@ -749,7 +819,7 @@ registerProcessor("tne-tap", Tap);`;
     const raw = audio.shortTermLufs();
     const gain = Number($("gain").value);
     const l = raw === null ? null : raw + gain;
-    const t = ep && ep.turns[sel], band = cueBand(t);
+    const band = cueBand();
     const lvl = $("lvl");
     lvl.style.width = l === null ? "0" : `${pct(l)}%`;
     lvl.classList.toggle("hot", l !== null && l > band.hi);
@@ -758,32 +828,43 @@ registerProcessor("tne-tap", Tap);`;
     if (mode === "recording" || mode === "finishing") $("clock").textContent = fmtClock(audio.recSamples / (audio.ctx ? audio.ctx.sampleRate : RATE));
   }
 
+  const ICON = {
+    play: `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>`,
+    rec: `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="7.5" fill="currentColor"/></svg>`,
+    done: `<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v12"/><path d="M6.5 10.5 12 16l5.5-5.5"/><path d="M4.5 20.5h15"/></svg>`,
+    stop: `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="1.5" fill="currentColor"/></svg>`,
+  };
+
   function setMode(m) {
     mode = m;
-    const big = $("big");
-    big.classList.toggle("recording", m === "recording");
-    big.classList.toggle("listening", m === "listening");
-    big.textContent = { idle: "Take", listening: "Listen…", recording: "Done", finishing: "Done", review: "Take", saving: "Saving…" }[m];
-    big.disabled = !ep || m === "finishing" || m === "saving" || m === "review";
-    $("retake").disabled = !ep || m === "finishing" || m === "saving";
-    $("tally").classList.toggle("on", m === "recording" || m === "finishing");
-    $("review").hidden = !(m === "review" || m === "saving");
-    $("save").disabled = m === "saving";
-    $("discard").disabled = m === "saving";
+    const cur = ep && ep.seq[sel];
+    const recBtn = $("rec"), recording = m === "recording";
+    $("play").disabled = !ep || m !== "idle";
+    recBtn.disabled = !(recording || (m === "idle" && canRecord(cur)));
+    recBtn.classList.toggle("recording", recording || m === "finishing");
+    recBtn.innerHTML = recording || m === "finishing" ? ICON.done : ICON.rec;
+    recBtn.setAttribute("aria-label", recording ? "Done: save this take and go on" : "Record from this line");
+    recBtn.title = recBtn.getAttribute("aria-label");
+    $("stop").disabled = m === "idle";
+    $("tally").classList.toggle("on", recording || m === "finishing");
     $("episode").disabled = !ep || m !== "idle";
-    if ($("mic")) $("mic").disabled = !(m === "idle" || m === "review");
+    if ($("mic")) $("mic").disabled = m !== "idle";
+    document.body.dataset.mode = m;
   }
 
-  let scrollToSel = true;   // set when the recorder moves the selection (run-on, opening an episode, arrow keys)
+  let scrollToSel = true;   // set when the recorder moves the selection (play, record, opening an episode, arrow keys)
   function select(i, scroll = false) {
-    if (!ep || mode !== "idle" || i < 0 || i >= ep.turns.length) return;
+    if (!ep || mode !== "idle" || i < 0 || i >= ep.seq.length) return;
+    moveTo(i, scroll);
+  }
+  function moveTo(i, scroll = true) {
     sel = i;
     scrollToSel = scroll;
-    local.set(`tne.turn.${ep.name}`, ep.turns[i].key);
-    renderRail(); renderTurn();
+    local.set(`tne.sel.${ep.name}`, ep.seq[i].key);
+    renderRail(); renderTurn(); setMode(mode);
   }
 
-  // ---------- taking ----------
+  // ---------- play and record ----------
 
   async function ensureHeadphones() {
     try { if (sessionStorage.getItem("tne.phones")) return; } catch (_) {}
@@ -795,71 +876,111 @@ registerProcessor("tne-tap", Tap);`;
     try { sessionStorage.setItem("tne.phones", "1"); } catch (_) {}
   }
 
-  async function startTake(lead, tapped = true) {
-    if (!ep) return;
+  /** Play one line's audio within a run; false when the run was stopped. A raw take covering several lines plays once. */
+  async function playItem(me, it, from = 0) {
+    const src = itemSource(it);
+    if (src && src.take) { if (me.lastTake === src.take) return !me.cancelled; me.lastTake = src.take; } else me.lastTake = null;
+    let b = null;
+    try { b = await bufferFor(it); }
+    catch (e) { if (e instanceof AuthError) { signInAgain(); me.cancelled = true; return false; } banner(`Couldn't play a line (${e.message || e}); going on.`, true); }
+    if (b && !me.cancelled) await audio.play(b, from < 0 ? b.duration + from : from);
+    return !me.cancelled;
+  }
+
+  /** Play from the selected line on, line after line, until the end or Stop. */
+  async function playFrom(i) {
+    if (!ep || mode !== "idle") return;
+    await audio.output();
+    const me = run = { kind: "play", cancelled: false };
+    setMode("playing");
+    for (let k = i; k < ep.seq.length; k++) {
+      moveTo(k);
+      if (!(await playItem(me, ep.seq[k]))) break;
+    }
+    if (run === me) run = null;
+    setMode("idle");
+  }
+
+  /** Record from the selected flagged line: the last seconds of what comes before it, the ding, the take. Done saves it
+      and plays on to the next flagged narrator line; the run ends when none are left, or at Stop. */
+  async function recordFrom(i) {
+    if (!ep || mode !== "idle" || !canRecord(ep.seq[i])) return;
     await ensureHeadphones();
     // a run of takes can outlast the hour a sign-in lasts: renew it now, from this tap, rather than mid-run
-    if (tapped && !ep.demo && drive.left() < RENEW_S) { try { await drive.auth(); } catch (_) {} }
+    if (!ep.demo && drive.left() < RENEW_S) { try { await drive.auth(); } catch (_) {} }
     try { await audio.open(); } catch (e) {
       banner(e && e.name === "NotAllowedError" ? "The microphone is blocked. Allow it for this site in the browser, then try again." : `Couldn't open the microphone: ${e.message || e}`, true);
       return;
     }
-    banner("");
-    showMic();
-    const t = ep.turns[sel];
+    banner(""); showMic();
+    const me = run = { kind: "record", cancelled: false, done: null, lastTake: null };
+    let k = i, takes = 0;
     setMode("listening");
-    let cancelled = false;
-    cancelListen = () => { cancelled = true; audio.stopPlayback(); };
-    try {
-      if (t.cue) {
-        const buf = await fireflyBuffer(t.cue.entry || { text: t.cue.text, clip: "" });
-        if (buf && !cancelled) await audio.play(buf, lead ? buf.duration - LEAD_S : 0);
+    moveTo(k);
+    if (k > 0) await playItem(me, ep.seq[k - 1], -LEAD_S);
+    while (!me.cancelled) {
+      const it = ep.seq[k];
+      moveTo(k); setMode("listening");
+      await audio.ding();
+      if (me.cancelled) break;
+      audio.startRecording();
+      take = { key: it.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value), mic: audio.micLabel };
+      setMode("recording");
+      await new Promise(res => { me.done = res; });
+      me.done = null;
+      if (me.cancelled) { await audio.stopRecording(); take = null; break; }   // Stop: the take is discarded
+      setMode("finishing");
+      await sleep(TAIL_S * 1000);
+      const t = take; take = null;
+      t.samples = await audio.stopRecording();
+      t.takeId = newTakeId(t.recorded);
+      await queueUpload(t);   // saved to Drive behind the next line; the flag is cleared
+      takes++;
+      // play on through what's already fine, to the next flagged narrator line
+      setMode("listening");
+      me.lastTake = null;
+      let next = -1;
+      for (let j = k + 1; j < ep.seq.length; j++) {
+        if (canRecord(ep.seq[j])) { next = j; break; }
+        moveTo(j);
+        if (!(await playItem(me, ep.seq[j]))) break;
       }
-    } catch (e) {
-      if (e instanceof AuthError) { setMode("idle"); signInAgain(); return; }
-      banner(`Couldn't play the firefly's line (${e.message}); recording without it.`);
+      if (next < 0 || me.cancelled) break;
+      k = next;
     }
-    cancelListen = null;
-    await audio.ding();
-    audio.startRecording();
-    take = { turnKey: t.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value), mic: audio.micLabel,
-      fresh: needsTake(t) };   // a first take runs on to the next line; a retake of a recorded one stops for review
-    setMode("recording");
+    audio.releaseMic(); showMic();
+    if (run === me) run = null;
+    setMode("idle");
+    renderRail(); renderTurn(); setMode("idle");
+    if (!me.cancelled) banner(takes ? `No flagged lines left. ${takes} take${takes > 1 ? "s" : ""} saved.` : "");
+    await audio.jingle();
   }
 
-  async function done() {
-    if (mode !== "recording") return;
-    setMode("finishing");
-    await sleep(TAIL_S * 1000);
-    take.samples = await audio.stopRecording();
-    take.takeId = newTakeId(take.recorded);
-    audio.releaseMic(); showMic();
-    if (take.fresh && $("runOn").checked) {
-      const t = take; take = null;
-      await queueUpload(t);
-      setMode("idle");
-      const next = ep.turns.findIndex((x, i) => i > sel && needsTake(x));
-      if (next < 0) { select(sel); banner("That's the last line still to record."); return; }
-      select(next, true);
-      return startTake(false, false);   // the next line's firefly cue, the ding, and recording
-    }
-    await idb.put("pending", "current", { ...take, episode: ep.name, episodeId: ep.id, recorded: take.recorded.toISOString() });
-    enterReview();
+  function recPressed() {
+    if (mode === "recording" && run && run.done) { const d = run.done; d(); return; }
+    if (mode === "idle") recordFrom(sel);
+  }
+  function stopPressed() {
+    if (!run) return;
+    run.cancelled = true;
+    audio.stopPlayback();
+    if (run.done) { const d = run.done; d(); }
   }
 
   // ---------- uploads that run behind the next take ----------
   // Each waiting take is kept in IndexedDB until its sidecar is on Drive, so a reload or a lapsed sign-in loses nothing.
 
   const uploads = { list: [], busy: false, pct: 0 };
+  const turnFor = it => it.type === "ocarina" ? { kind: "ocarina", cueN: it.cue, key: it.key } : { kind: "lines", lines: [it], key: it.key };
 
   async function queueUpload(t) {
-    const turn = ep.turns.find(x => x.key === t.turnKey);
-    if (!turn) return;
-    t.ep = ep; t.turn = turn;
+    const it = ep.seq.find(x => x.key === t.key);
+    if (!it) return;
+    t.ep = ep; t.turn = turnFor(it);
     keepTakeAudio(t);
-    const keys = turn.kind === "ocarina" ? [turn.key] : turn.lines.map(lineKey);
-    for (const k of keys) ep.saved[k] = t.takeId;   // shown as saved now; written to this browser's list once it's on Drive
-    if (!ep.demo) await idb.put("pending", `q:${t.takeId}`, { samples: t.samples, rate: t.rate, turnKey: t.turnKey, takeId: t.takeId,
+    ep.saved[it.key] = t.takeId;   // shown as saved now; written to this browser's list once it's on Drive
+    if (ep.userFlags[it.key]) saveFlag(it.key, null);   // the take answers the flag
+    if (!ep.demo) await idb.put("pending", `q:${t.takeId}`, { samples: t.samples, rate: t.rate, turnKey: t.key, takeId: t.takeId,
       recorded: t.recorded.toISOString(), gain: t.gain, mic: t.mic, episode: ep.name, episodeId: ep.id });
     uploads.list.push(t);
     renderRail();
@@ -868,7 +989,8 @@ registerProcessor("tne-tap", Tap);`;
 
   function showUploads() {
     const n = uploads.list.length, el = $("uploads");
-    el.textContent = !n ? "" : uploads.busy ? `Uploading ${n} take${n > 1 ? "s" : ""}… ${Math.round(uploads.pct * 100)}%` : `${n} take${n > 1 ? "s" : ""} waiting to upload`;
+    el.textContent = !n ? "" : uploads.busy ? `↑${n} ${Math.round(uploads.pct * 100)}%` : `↑${n} waiting`;
+    el.title = !n ? "" : `${n} take${n > 1 ? "s" : ""} uploading to Drive`;
   }
 
   async function pumpUploads() {
@@ -889,7 +1011,7 @@ registerProcessor("tne-tap", Tap);`;
       uploads.list.shift();
       local.set(`tne.saved.${t.ep.name}`, t.ep.saved);
       if (!t.ep.demo) await idb.del("pending", `q:${t.takeId}`);
-      if (ep === t.ep) renderRail();
+      if (ep === t.ep && mode === "idle") renderRail();
     }
     uploads.busy = false; showUploads();
   }
@@ -903,72 +1025,24 @@ registerProcessor("tne-tap", Tap);`;
       if (uploads.list.some(t => `q:${t.takeId}` === k)) continue;
       const p = await idb.get("pending", k);
       if (!p || p.episodeId !== ep.id) continue;
-      const turn = ep.turns.find(x => x.key === p.turnKey);
-      if (!turn) continue;
-      uploads.list.push({ ...p, recorded: new Date(p.recorded), ep, turn });
+      const it = ep.seq.find(x => x.key === p.turnKey);
+      if (!it) continue;
+      uploads.list.push({ ...p, key: p.turnKey, recorded: new Date(p.recorded), ep, turn: turnFor(it) });
       n++;
     }
     if (n) { banner(`Uploading ${n} take${n > 1 ? "s" : ""} left from last time.`); pumpUploads(); }
   }
 
-  /** Encode a take and put it on Drive (the audio, then its sidecar), or offer it as a download in the demo. */
+  /** Encode a take and put it on Drive (the audio, then its sidecar). The demo keeps it in this page only. */
   async function persistTake(t, turn, e, progress) {
+    if (e.demo) { await sleep(150); return; }
     const file = await encodeTake(t.samples, t.rate);
     t.ext = file.ext;
     const side = sidecar(t, turn, e);
-    if (e.demo) {
-      const a = $("download"); a.href = URL.createObjectURL(file.blob); a.download = `${t.takeId}.${file.ext}`;
-      a.textContent = `Download ${file.ext === "opus" ? "Opus" : "WAV"}`;
-      await sleep(200);
-      return;
-    }
     if (!e.recordings) e.recordings = await drive.folder(e.id, "recordings");
     await drive.upload(e.recordings.id, `${t.takeId}.${file.ext}`, file.blob, file.mime, progress);
     // the sidecar last: the notebook treats a sidecar as a finished take
     await drive.uploadSmall(e.recordings.id, `${t.takeId}.json`, JSON.stringify(side, null, 1), "application/json");
-  }
-
-  function enterReview() {
-    setMode("review");
-    $("clock").textContent = fmtClock(take.samples.length / take.rate);
-    $("takeInfo").textContent = `${(take.samples.length / take.rate).toFixed(1)} s · ${take.rate / 1000} kHz · peak ${peakDb(take.samples)} dBFS`;
-    $("download").hidden = true;
-    drawWave(take.samples);
-  }
-
-  const peakDb = s => { let p = 0; for (let i = 0; i < s.length; i++) { const a = Math.abs(s[i]); if (a > p) p = a; } return p ? (20 * Math.log10(p)).toFixed(1) : "−∞"; };
-
-  function drawWave(s) {
-    const c = $("wave"), g = c.getContext("2d"), w = c.width, h = c.height;
-    const css = getComputedStyle(document.documentElement);
-    g.clearRect(0, 0, w, h);
-    g.fillStyle = css.getPropertyValue("--moss").trim() || "#3E6A49";
-    const per = Math.max(1, Math.floor(s.length / w));
-    for (let x = 0; x < w; x++) {
-      let lo = 0, hi = 0;
-      for (let i = x * per; i < Math.min(s.length, (x + 1) * per); i++) { if (s[i] < lo) lo = s[i]; if (s[i] > hi) hi = s[i]; }
-      g.fillRect(x, h / 2 - hi * h / 2, 1, Math.max(1, (hi - lo) * h / 2));
-    }
-  }
-
-  async function playReview() {
-    if (!take) return;
-    if (reviewPlayback) { audio.stopPlayback(); reviewPlayback = false; $("playTake").textContent = "Play take"; return; }
-    await audio.output();
-    reviewPlayback = true; $("playTake").textContent = "Stop";
-    const t = ep.turns.find(x => x.key === take.turnKey);
-    try {
-      if ($("withCue").checked && t && t.cue) {
-        const cb = await fireflyBuffer(t.cue.entry || { text: t.cue.text, clip: "" });
-        if (cb && reviewPlayback) await audio.play(cb);
-      }
-      if (reviewPlayback) {
-        const b = audio.ctx.createBuffer(1, take.samples.length, take.rate);
-        b.copyToChannel(take.samples, 0);
-        await audio.play(b);
-      }
-    } catch (e) { if (e instanceof AuthError) signInAgain(); }
-    reviewPlayback = false; $("playTake").textContent = "Play take";
   }
 
   // takes recorded in this page, kept in memory so they play back before (and without) a round trip to Drive
@@ -986,27 +1060,6 @@ registerProcessor("tne-tap", Tap);`;
     const f = (await drive.children(ep.recordings.id)).find(f => f.name.startsWith(takeId + ".") && !f.name.endsWith(".json"));
     return f ? audio.ctx.decodeAudioData(await drive.bytes(f.id)) : null;
   }
-  /** Play the narrator's own take for a line: the notebook's clip, or the raw take while it's waiting to be processed. */
-  async function playMine(src) {
-    if (mode !== "idle" && mode !== "review") return;
-    try {
-      await audio.output();
-      audio.stopPlayback();
-      const b = src.entry ? await fireflyBuffer(src.entry) : await takeBuffer(src.take);
-      if (!b) { banner("That take isn't on Drive yet. It plays once its upload finishes.", true); return; }
-      await audio.play(b);
-    } catch (e) { if (e instanceof AuthError) signInAgain(); else banner(`Couldn't play that take: ${e.message || e}`, true); }
-  }
-
-  async function playCueOnly(item) {
-    if (mode !== "idle" && mode !== "review") return;
-    try {
-      await audio.output();
-      audio.stopPlayback();
-      const b = await fireflyBuffer(item.entry || { text: item.text, clip: "" });
-      if (b) await audio.play(b);
-    } catch (e) { if (e instanceof AuthError) signInAgain(); else banner(`Couldn't play that line: ${e.message || e}`, true); }
-  }
 
   function sidecar(t, turn, ep) {
     const base = { format: "trail-take/1", take: t.takeId, recorded: isoLocal(t.recorded instanceof Date ? t.recorded : new Date(t.recorded)),
@@ -1017,67 +1070,6 @@ registerProcessor("tne-tap", Tap);`;
     if (t.mic) base.mic = t.mic;
     base.script_sha1 = ep.scriptSha1;
     return base;
-  }
-
-  async function save(advance = true) {
-    if (!take) return false;
-    const turn = ep.turns.find(x => x.key === take.turnKey);
-    if (!turn) { banner("This take's turn is no longer in the script. Discard it, or reopen the episode it belongs to.", true); return false; }
-    if (!ep.demo && !drive.valid()) { signInAgain(() => save(advance)); return false; }
-    setMode("saving");
-    $("save").textContent = "Encoding…";
-    try {
-      await persistTake(take, turn, ep, p => { $("save").textContent = `Uploading ${Math.round(p * 100)}%`; });
-      if (ep.demo) $("download").hidden = false;
-    } catch (e) {
-      $("save").innerHTML = "Save to Drive <kbd>Enter</kbd>";
-      setMode("review");
-      if (e instanceof AuthError) signInAgain(() => save(advance)); else banner(`${e.message} Your take is still here; try Save again.`, true);
-      return false;
-    }
-    $("save").innerHTML = "Save to Drive <kbd>Enter</kbd>";
-    const keys = turn.kind === "ocarina" ? [turn.key] : turn.lines.map(lineKey);
-    for (const k of keys) ep.saved[k] = take.takeId;
-    local.set(savedKey(), ep.saved);
-    keepTakeAudio(take);
-    await idb.del("pending", "current");
-    const demoLink = ep.demo;
-    take = null;
-    setMode("idle");
-    if (demoLink) { $("review").hidden = false; $("save").disabled = true; $("discard").disabled = true; }
-    banner(ep.demo ? "Saved in the demo (not to Drive). Download the take above to check it." : "Saved to Drive. The notebook picks it up on its next run.");
-    if (advance) {
-      const next = ep.turns.findIndex((t, i) => i > sel && needsTake(t));
-      select(next >= 0 ? next : sel);
-    } else { renderRail(); renderTurn(); }
-    return true;
-  }
-
-  async function discard() {
-    if (mode !== "review") return;
-    audio.stopPlayback(); reviewPlayback = false;
-    take = null;
-    await idb.del("pending", "current");
-    setMode("idle");
-  }
-
-  async function retake() {
-    if (!ep) return;
-    if (mode === "listening") { cancelListen && cancelListen(); return; }
-    if (mode === "recording") { setMode("finishing"); await audio.stopRecording(); take = null; setMode("idle"); return startTake(true); }
-    if (mode === "review") {
-      audio.stopPlayback(); reviewPlayback = false;
-      if ($("keepBoth").checked) { if (!(await save(false))) return; }
-      else { take = null; await idb.del("pending", "current"); setMode("idle"); }
-      $("keepBoth").checked = false;
-    }
-    if (mode === "idle") return startTake(true);
-  }
-
-  function bigPressed() {
-    if (mode === "idle") startTake(false);
-    else if (mode === "listening") { cancelListen && cancelListen(); }
-    else if (mode === "recording") done();
   }
 
   // ---------- episodes ----------
@@ -1125,8 +1117,11 @@ registerProcessor("tne-tap", Tap);`;
     if (clipsF) for (const f of await drive.children(clipsF.id)) clips[f.name] = f;
     const recF = files.find(f => f.name === "recordings" && f.mimeType === FOLDER) || null;
     const onDrive = recF ? await savedOnDrive(recF.id, manifest) : {};
+    let userFlags = {};
+    const flagsF = by("flags.json");
+    if (flagsF) { try { const d = JSON.parse(await drive.text(flagsF.id)); if (d && d.format === "trail-flags/1" && d.lines) userFlags = d.lines; } catch (_) {} }
     banner("");
-    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false, onDrive });
+    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false, onDrive, userFlags });
     local.set("tne.episode", id);
     resumeUploads();
   }
@@ -1135,14 +1130,16 @@ registerProcessor("tne-tap", Tap);`;
     ep = e;
     ep.items = parseScript(e.script);
     attachManifest(ep.items, e.manifest.lines || []);
-    ep.turns = buildTurns(ep.items);
+    ep.seq = ep.items.filter(it => it.type === "line" || it.type === "ocarina");
+    ep.seq.forEach((it, k) => { it.seqIndex = k; it.key = it.type === "ocarina" ? `cue:${it.cue}` : lineKey(it); });
+    ep.userFlags = e.userFlags || {};
     // Drive's sidecars, plus this browser's own list for takes still uploading or uploaded a moment ago
     ep.saved = { ...local.get(savedKey(), {}), ...(e.onDrive || {}) };
     ep.flags = notebookFlags(e.manifest);
     ep.scriptSha1 = await sha1Hex(e.script);
-    const lastKey = local.get(`tne.turn.${ep.name}`, null);
-    let i = ep.turns.findIndex(t => t.key === lastKey);
-    if (i < 0 || !needsTake(ep.turns[i])) { const n = ep.turns.findIndex(needsTake); i = n >= 0 ? n : Math.max(0, i); }
+    const lastKey = local.get(`tne.sel.${ep.name}`, null);
+    let i = ep.seq.findIndex(it => it.key === lastKey);
+    if (i < 0) { const n = ep.seq.findIndex(canRecord); i = n >= 0 ? n : 0; }
     sel = i;
     scrollToSel = true;
     const unvoiced = ep.items.filter(it => it.type === "line" && it.speaker === "narrator" && !it.entry).length;
@@ -1177,36 +1174,10 @@ NARRATOR: That one always helps me think.
       index: k, id: norm(l.text).replace(/'/g, "").split(" ").slice(0, 5).join("-") + "-demo", speaker: l.speaker, text: l.text,
       clip: "", source: l.speaker === "claude" ? "tts" : "placeholder", lufs: -20,
     }));
-    await setEpisode({ id: "demo", name: "demo", script: DEMO_SCRIPT, manifest: { lines, cues: [], takes: {} }, clips: {}, demo: true });
+    await setEpisode({ id: "demo", name: "demo", script: DEMO_SCRIPT, manifest: { lines, cues: [], takes: {} }, clips: {}, demo: true,
+      userFlags: local.get("tne.demoFlags", {}) });
     const s = $("episode"); s.textContent = ""; const o = document.createElement("option"); o.textContent = "Demo (nothing goes to Drive)"; s.append(o);
     banner("Demo: the firefly is a chirp, and takes stay in this browser. Sign in to record a real episode.");
-  }
-
-  // ---------- recovery ----------
-
-  async function checkPending() {
-    const p = await idb.get("pending", "current");
-    if (!p || !p.samples) return;
-    $("restoreText").textContent = `A ${(p.samples.length / p.rate).toFixed(1)} s take for ${p.episode} wasn't saved. Open that episode and review it, or discard it.`;
-    const d = $("restore");
-    $("restoreDrop").onclick = async () => { await idb.del("pending", "current"); d.close(); };
-    $("restoreOpen").onclick = async () => {
-      d.close();
-      if (!ep || ep.name !== p.episode) {
-        if (p.episode === "demo") await demoEpisode();
-        else if (!drive.valid()) { banner(`Sign in to review the unsaved take for ${p.episode}.`); window.__tnePending = p; return; }
-        else { $("episode").value = p.episodeId; await openEpisode(p.episodeId, p.episode); }
-      }
-      restoreTake(p);
-    };
-    d.showModal();
-  }
-
-  function restoreTake(p) {
-    take = { samples: p.samples, rate: p.rate, turnKey: p.turnKey, takeId: p.takeId, recorded: new Date(p.recorded), gain: p.gain };
-    const i = ep.turns.findIndex(t => t.key === p.turnKey);
-    if (i >= 0) { sel = i; renderRail(); renderTurn(); }
-    enterReview();
   }
 
   // ---------- wiring ----------
@@ -1223,13 +1194,13 @@ NARRATOR: That one always helps me think.
   function boot() {
     $("mic").addEventListener("change", () => {
       local.set("tne.mic", $("mic").value);
-      audio.releaseMic();   // idle or review only (the picker is disabled otherwise); a take in review is kept
+      audio.releaseMic();   // idle only: the picker is disabled otherwise
       showMic();
     });
     try {
       navigator.mediaDevices.addEventListener("devicechange", () => {
         // plugged in or out between takes: reopen on the next take, so Automatic finds the headset
-        if (audio.stream && (mode === "idle" || mode === "review") && !local.get("tne.mic", "")) audio.releaseMic();
+        if (audio.stream && mode === "idle" && !local.get("tne.mic", "")) audio.releaseMic();
         showMic();
       });
     } catch (_) {}
@@ -1244,10 +1215,6 @@ NARRATOR: That one always helps me think.
         await drive.auth();
         $("signin").textContent = "Signed in"; $("signin").disabled = true; document.body.classList.add("signed-in");
         await loadEpisodeList();
-        if (window.__tnePending && ep && ep.name !== window.__tnePending.episode) {
-          const p = window.__tnePending; window.__tnePending = null;
-          $("episode").value = p.episodeId; await openEpisode(p.episodeId, p.episode); restoreTake(p);
-        }
       } catch (e) { banner(e instanceof AuthError ? e.message : e.message || String(e), true); }
     });
     $("demo").addEventListener("click", () => { if (mode === "idle") demoEpisode(); });
@@ -1256,25 +1223,28 @@ NARRATOR: That one always helps me think.
       const o = e.target.selectedOptions[0];
       try { await openEpisode(o.value, o.textContent); } catch (err) { if (err instanceof AuthError) signInAgain(); else banner(err.message, true); }
     });
-    $("big").addEventListener("click", bigPressed);
-    $("retake").addEventListener("click", retake);
-    $("save").addEventListener("click", () => save(true));
-    $("discard").addEventListener("click", discard);
-    $("playTake").addEventListener("click", playReview);
+    $("play").innerHTML = ICON.play; $("stop").innerHTML = ICON.stop;
+    $("play").addEventListener("click", () => playFrom(sel));
+    $("rec").addEventListener("click", recPressed);
+    $("stop").addEventListener("click", stopPressed);
 
     document.addEventListener("keydown", e => {
       const tag = e.target.tagName;
       if (tag === "SELECT" || (tag === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox")) return;
       if (document.querySelector("dialog[open]")) return;
-      if (e.code === "Space") { e.preventDefault(); if (!e.repeat) bigPressed(); }
-      else if (e.key === "r" || e.key === "R") { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); retake(); } }
-      else if (e.key === "Enter" && mode === "review") { e.preventDefault(); save(true); }
-      else if (e.key === "Backspace" && mode === "review") { e.preventDefault(); discard(); }
+      if (e.code === "Space") {   // Done while recording; otherwise Record where it can, else Play
+        e.preventDefault();
+        if (e.repeat) return;
+        if (mode === "recording") recPressed();
+        else if (mode === "idle" && ep) { if (canRecord(ep.seq[sel])) recordFrom(sel); else playFrom(sel); }
+      }
+      else if (e.key === "Escape") { if (run) { e.preventDefault(); stopPressed(); } }
+      else if ((e.key === "f" || e.key === "F") && mode === "idle" && ep && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleFlag(ep.seq[sel]); }
       else if (mode === "idle" && ep && (e.key === "ArrowDown" || e.key === "ArrowUp") && e.target.tagName !== "INPUT") {
         e.preventDefault(); select(sel + (e.key === "ArrowDown" ? 1 : -1), true);
       }
     });
-    window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "saving" || uploads.list.length) { e.preventDefault(); e.returnValue = ""; } });
+    window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "finishing" || uploads.list.length) { e.preventDefault(); e.returnValue = ""; } });
     setInterval(meter, 100);
     setMode("idle");
     if (!CFG.clientId) $("signin").title = "Set clientId in config.js to sign in";
@@ -1285,10 +1255,7 @@ NARRATOR: That one always helps me think.
     };
     setOpen(local.get("tne.settingsOpen", false));
     $("settingsBtn").addEventListener("click", () => setOpen($("settings").hidden));
-    const runOn = local.get("tne.runOn", true);
-    $("runOn").checked = runOn;
-    $("runOn").addEventListener("change", () => local.set("tne.runOn", $("runOn").checked));
-    checkPending();
+    idb.del("pending", "current");   // a take waiting for review, from before takes were saved straight away
     if (CFG.clientId && drive.restore()) {
       // signed in within the hour: carry on without asking
       $("signin").textContent = "Signed in"; $("signin").disabled = true; document.body.classList.add("signed-in");
@@ -1327,5 +1294,5 @@ NARRATOR: That one always helps me think.
 
   boot();
   showVersion();
-  window.__tne = { parseScript, attachManifest, buildTurns, norm, wav24, encodeTake, state: () => ({ mode, sel, ep, take }) };
+  window.__tne = { parseScript, attachManifest, norm, wav24, encodeTake, state: () => ({ mode, sel, ep, take, run }) };
 })();

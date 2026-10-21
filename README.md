@@ -1,22 +1,28 @@
 # Trail Narration Engine
 
-The narrator's recording booth for the trail channel. It reads an episode's script and the firefly's voiced lines from Google Drive, plays the firefly in your headphones as a cue, records your turn (captured raw at 48 kHz, saved as mono Opus at 160 kbps; 24-bit WAV if the browser can't encode Opus), lets you review it, and saves it with a `trail-take/1` sidecar into the episode's `recordings/` folder for the voice notebook in [`neonms92/hiker-engine`](https://github.com/neonms92/hiker-engine) (`voice/`).
+The narrator's recording booth for the trail channel. It reads an episode's script and the firefly's voiced lines from Google Drive, plays the episode through your headphones, records the narrator lines flagged for a take (captured raw at 48 kHz, saved as mono Opus at 160 kbps; 24-bit WAV if the browser can't encode Opus), and saves each with a `trail-take/1` sidecar into the episode's `recordings/` folder for the voice notebook in [`neonms92/hiker-engine`](https://github.com/neonms92/hiker-engine) (`voice/`). Flags you set go to the episode's `flags.json`, where the notebook picks up the firefly's.
 
 The spec lives in the **Trail Narration Engine Spec** doc. Interface changes (the Drive contract, the sidecar format) land there first, then here and in `hiker-engine/voice/`.
 
 ## Using it
 
-1. Run the voice notebook on the episode once, so its Drive folder has `script.trail`, `manifest.json` and the firefly's clips.
-2. Open the site, **Sign in with Google**, pick the episode. It opens on the first turn not yet recorded.
-3. Headphones on. Press **Take** (Space): the firefly's line plays, a ding sounds, and recording starts as the ding ends. Read the turn, then press **Done** (Space).
-4. Review: play it back (with the firefly's cue, if you like), then **Save** (Enter), **Discard** (Backspace), or **Retake** (R), which plays the last 3 seconds of the cue, dings, and records again. Tick "keep this one too" to save the current take before retaking.
-5. The next unrecorded turn comes up. Run the notebook when you're done; its report shows in the Trail Scene Engine's Issues panel.
+1. Run the voice notebook on the episode once, so its Drive folder has `script.trail`, `manifest.json` and the clips.
+2. Open the site, **Sign in with Google**, pick the episode. It opens on the first line flagged for a take.
+3. Headphones on. The three buttons at the bottom:
+   - **▶ Play** plays from the selected line on, line after line: the firefly's clips, and your newest take of each narrator line (the placeholder voice where there's none yet).
+   - **● Record** starts from the selected line when it's a flagged narrator line (or ocarina song): the last 3 seconds of the line before, a ding, and recording. While recording it shows **⤓ Done**: the take is saved to Drive straight away, its flag cleared, and playback runs on through the lines in between to the next flagged narrator line, which dings and records. When none are left the run ends with a jingle.
+   - **■ Stop** ends playing or recording; a take in progress is discarded.
+4. Run the notebook when you're done; its report shows in the Trail Scene Engine's Issues panel.
 
-Arrow keys move between turns. Click a firefly line in the script to hear it on its own. The **Gain** slider is stored with each take for the mixer; it never changes the recording. A take you haven't saved survives a reload: the page offers it back.
+Keys: Space is Done while recording, otherwise Record (or Play where there's nothing to record); Escape stops; F flags the selected line; the arrow keys move the selection.
 
-The **Demo** button runs the whole flow with a built-in script and a chirp for the firefly; takes stay in the browser and can be downloaded. Nothing goes to Drive.
+**Flags.** Every line has a flag. A narrator line is flagged on its own when it has no take yet, or the notebook couldn't use its last one (not heard in the take, or a silent take); you can flag any other line to take it again, or clear a flag to skip a line. Flagging a firefly line asks what's wrong with it: the notebook voices it again on a fresh seed with your note added to its direction ("slower and warmer, less sing-song"), then clears the flag. Describe how it should sound rather than what not to do; pronunciation and wording are better fixed in the script.
 
-Line states in the script: green recorded, amber saved but not processed yet, orange needs review (you said it differently; see the report), grey not recorded, dashed not voiced yet (added to the script after the last notebook run; you can still record it, and the notebook matches it by text).
+Line states in the script: green recorded, amber saved but not processed yet, orange needs review (you said it differently; see the report), red the notebook couldn't use the last take, grey not recorded, dashed not voiced yet (added to the script after the last notebook run; you can still record it, and the notebook matches it by text).
+
+The **Gain** slider (under the gear) is stored with each take for the mixer; it never changes the recording. Takes waiting to upload survive a reload.
+
+The **Demo** button runs the whole flow with a built-in script and a chirp for the firefly; takes stay in the page. Nothing goes to Drive.
 
 ## Setup (once)
 

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: a booth. The script is one list; the turn you're on opens in place, large, with its review.
+/* Layout: a booth. The script is one list; the line you're on opens in place, large, with its flag.
    The transport and a slim meter are pinned to the bottom within thumb's reach; the rest folds into Settings. */
 :root {
   --bg: #EDEFE8; --panel: #F7F8F3; --ink: #18211B; --muted: #5B675E; --line: #CCD5C9; --field: #E2E8DE;
@@ -61,7 +61,7 @@ main { overflow: auto; min-height: 0; }
   header .grow { display: none; }
   header .ver { margin-left: auto; }
   header select { max-width: 100%; flex: 1 1 100%; order: 3; padding: 5px 8px; }
-  footer #big { min-width: 118px; }
+  .tbtn { width: 54px; height: 54px; }
   .transport { gap: 8px; }
   body.signed-in #demo { display: none; }
 }
@@ -76,8 +76,18 @@ main { overflow: auto; min-height: 0; }
 .item.sel { border-color: var(--moss); background: var(--field); }
 .item .t { font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
 .item.claude .t { color: var(--firefly); font-style: italic; }
-.item.claude { cursor: default; grid-template-columns: 18px 1fr; }
-.item .play.me { color: var(--moss); }
+.item .spark { color: var(--firefly); font-size: 12px; line-height: 22px; text-align: center; }
+.item.claude { cursor: pointer; grid-template-columns: 18px 1fr auto; }
+.flag { border: 0; background: none; padding: 2px 4px; color: color-mix(in srgb, var(--muted) 45%, transparent); display: inline-flex; align-items: center; gap: 6px; align-self: start; }
+.flag[aria-pressed="true"] { color: var(--rec); }
+.item:hover .flag:not([aria-pressed="true"]) { color: var(--muted); }
+.flag.big { border: 1px solid var(--line); background: var(--field); padding: 6px 12px; color: var(--muted); font: 14px var(--ui); }
+.flag.big[aria-pressed="true"] { color: var(--rec); border-color: var(--rec); background: var(--rec-soft); }
+.panel-row { display: flex; gap: 10px; align-items: center; }
+#lines p.claude-line { font-style: italic; color: var(--firefly); }
+.open-turn.claude { border-color: var(--glow); }
+dialog textarea { width: 100%; margin-top: 8px; font: 15px/1.4 var(--ui); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--ink); }
+dialog label { font-size: 14px; color: var(--muted); }
 .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--line); }
 .dot.flagged { background: var(--rec); }
 .dot.recorded { background: var(--ok); } .dot.saved { background: var(--glow); } .dot.review { background: var(--warn); }
@@ -94,9 +104,6 @@ main { overflow: auto; min-height: 0; }
 #lines .st { font: 12px var(--ui); color: var(--muted); display: block; margin-top: 2px; }
 .banner { padding: 10px 14px; border-radius: 8px; background: var(--glow-soft); max-width: 70ch; }
 .banner.bad { background: var(--rec-soft); }
-#review { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-#wave { width: 100%; height: 96px; display: block; background: var(--field); border-radius: 6px; }
-#review .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .sub { font: 12.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 footer { border-top: 1px solid var(--line); background: var(--panel);
@@ -104,20 +111,22 @@ footer { border-top: 1px solid var(--line); background: var(--panel);
   display: grid; gap: 8px; }
 @media (max-width: 760px) {
   footer { padding-top: 8px; }
-  #big { min-height: 56px; min-width: 130px; }
 }
 body.signed-in #signin { display: none; }
 #settingsBtn { margin-left: auto; padding: 0; width: 44px; height: 44px; display: inline-grid; place-items: center; color: var(--muted); }
 .readout { display: inline-flex; flex-direction: column; gap: 2px; align-items: flex-start; }
-#uploads { flex: 1 1 0; min-width: 0; }
+#uploads { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #settingsBtn[aria-expanded="true"] { background: var(--field); }
 #settings { display: grid; gap: 10px; padding-top: 4px; border-top: 1px dashed var(--line); }
 #settings .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .transport { display: flex; gap: 10px; align-items: center; }
 .runon { display: inline-flex; gap: 6px; align-items: center; }
-#big { min-width: 168px; min-height: 64px; font: 700 1.25rem var(--ui); border-radius: 14px; background: var(--moss); color: var(--panel); border-color: var(--moss); }
-#big.recording { background: var(--rec); border-color: var(--rec); }
-#big.listening { background: var(--glow); border-color: var(--glow); color: #1d1606; }
+.tbtn { width: 60px; height: 60px; padding: 0; border-radius: 50%; display: inline-grid; place-items: center; }
+.tbtn.play { background: var(--moss); border-color: var(--moss); color: var(--panel); }
+.tbtn.rec { color: var(--rec); border-width: 2px; border-color: var(--rec); }
+.tbtn.rec.recording { background: var(--rec); color: var(--panel); }
+.tbtn.stop { color: var(--ink); }
+body[data-mode="listening"] .tbtn.rec:disabled { opacity: 1; border-style: dashed; }
 kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); }
 .meter { display: grid; gap: 6px; min-width: 0; }
 .bar { position: relative; height: 12px; border-radius: 6px; background: var(--field); overflow: hidden; }
@@ -161,6 +170,7 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
     <div class="empty" id="welcome">
       <h2>Ready when you are.</h2>
       <p>Sign in with Google to open an episode from <code>My Drive/hiker-engine/episodes</code>, or try the demo, which records locally and saves nothing to Drive.</p>
+      <p>▶ plays from the line you pick, on through the script. ● records from a flagged line: the lines between play, and each flagged narrator line dings and records; the ● becomes Done. ■ stops. Flag any line to take it again; a flagged firefly line gets a new take from the notebook, with your note.</p>
       <p>Headphones on: the firefly and the ding play only in your ears, so they stay out of the take.</p>
     </div>
     <div id="banner" class="banner" hidden aria-live="polite"></div>
@@ -169,27 +179,14 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
   <!-- the open turn's parts; renderRail moves them into the selected turn's panel -->
   <div id="pool" hidden>
     <div id="lines" hidden></div>
-    <div id="review" hidden>
-      <canvas id="wave" width="1400" height="192" aria-label="Waveform of the take"></canvas>
-      <div class="row">
-        <button id="playTake" type="button">Play take</button>
-        <label><input type="checkbox" id="withCue" checked> with the firefly's cue</label>
-        <span class="sub" id="takeInfo"></span>
-      </div>
-      <div class="row">
-        <button id="save" type="button" class="primary">Save to Drive <kbd>Enter</kbd></button>
-        <button id="discard" type="button">Discard <kbd>⌫</kbd></button>
-        <label><input type="checkbox" id="keepBoth"> keep this one too when I retake</label>
-        <a id="download" hidden>Download take</a>
-      </div>
-    </div>
   </div>
 </main>
 
 <footer>
   <div class="transport">
-    <button id="big" type="button" disabled>Take</button>
-    <button id="retake" type="button" disabled>Retake <kbd>R</kbd></button>
+    <button id="play" class="tbtn play" type="button" disabled aria-label="Play from this line" title="Play from this line"></button>
+    <button id="rec" class="tbtn rec" type="button" disabled aria-label="Record from this line" title="Record from this line"></button>
+    <button id="stop" class="tbtn stop" type="button" disabled aria-label="Stop" title="Stop"></button>
     <span class="readout"><span class="sub" id="clock">0:00.0</span><span class="clip" id="clipLight"><i></i>Clip</span></span>
     <span class="sub" id="uploads" aria-live="polite"></span>
     <button id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings" aria-label="Settings" title="Settings">
@@ -209,7 +206,6 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
       <select id="mic" aria-describedby="micNote"><option value="">Automatic (headset first)</option></select>
       <span class="sub" id="micNote"></span>
     </div>
-    <div class="row"><label class="sub runon"><input type="checkbox" id="runOn" checked> Run on to the next line</label></div>
     <div class="knobs">
     <label for="gain">Gain</label><input id="gain" type="range" min="-12" max="12" step="0.5" value="0"><output id="gainOut">0.0 dB</output>
     <label for="cueVol">Firefly</label><input id="cueVol" type="range" min="0" max="1.5" step="0.05" value="1"><output id="cueOut">100%</output>
@@ -223,10 +219,12 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
   <p>The firefly's cue and the ding play in your ears only. Through speakers they'd land in the take, and the notebook would hear the firefly as your words.</p>
   <div class="row"><button id="phonesOk" type="button" class="primary">They're on</button></div>
 </dialog>
-<dialog id="restore">
-  <h2>An unsaved take is waiting</h2>
-  <p id="restoreText"></p>
-  <div class="row"><button id="restoreDrop" type="button">Discard it</button><button id="restoreOpen" type="button" class="primary">Review it</button></div>
+<dialog id="flagDlg">
+  <h2>Flag the firefly's line</h2>
+  <p class="cue" id="flagLine"></p>
+  <label for="flagNote">What's wrong with it? The notebook gives your note to Breeze as direction for a new take. Describe how it should sound; leave it empty for just a fresh take.</label>
+  <textarea id="flagNote" rows="3" placeholder="e.g. slower and warmer, less sing-song"></textarea>
+  <div class="row"><button id="flagCancel" type="button">Cancel</button><button id="flagOk" type="button" class="primary">Flag it</button></div>
 </dialog>
 
 <script src="config.js"></script>
