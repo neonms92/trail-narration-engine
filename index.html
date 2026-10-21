@@ -82,6 +82,7 @@ main { overflow: auto; min-height: 0; }
 .flag[aria-pressed="true"] { color: var(--rec); }
 .item:hover .flag:not([aria-pressed="true"]) { color: var(--muted); }
 .open-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.open-head p { max-width: 34ch; }   /* a readable measure for the text; the flag keeps to the panel's right edge */
 .open-head .flag { margin-top: 6px; }
 #lines p.claude-line { font-style: italic; color: var(--firefly); }
 .open-turn.claude { border-color: var(--glow); }
@@ -96,7 +97,7 @@ dialog label { font-size: 14px; color: var(--muted); }
 
 .cue { font: italic 1.1rem/1.5 var(--read); color: var(--firefly); max-width: 62ch; border-left: 3px solid var(--glow); padding-left: 14px; }
 .cue small { display: block; font: 600 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-style: normal; margin-bottom: 2px; }
-#lines { display: flex; flex-direction: column; gap: 14px; max-width: 34ch; font: 400 clamp(1.5rem, 3.2vw, 2.4rem)/1.32 var(--read); }
+#lines { display: flex; flex-direction: column; gap: 14px; font: 400 clamp(1.5rem, 3.2vw, 2.4rem)/1.32 var(--read); }
 #lines p { margin: 0; text-wrap: pretty; }
 #lines p.missing { color: var(--muted); }
 #lines .note { font: 14px var(--ui); color: var(--warn); display: block; margin-top: 4px; }

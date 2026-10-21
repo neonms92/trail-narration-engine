@@ -758,14 +758,13 @@ registerProcessor("tne-tap", Tap);`;
         row.className = "item claude";
         const m = document.createElement("span"); m.className = "spark"; m.setAttribute("aria-hidden", "true"); m.textContent = "✦";
         t.textContent = it.text.replace(/\*/g, "");
-        if (isFlagged(it)) { const s = document.createElement("span"); s.className = "state"; s.textContent = "flagged for a new take"; t.append(s); }
         row.append(m, t);
       } else {
         const st = it.type === "ocarina" ? cueState(it) : lineState(it);
         row.className = "item";
         const dot = document.createElement("span"); dot.className = `dot ${st}`;
         t.textContent = it.type === "ocarina" ? `Ocarina song ${it.cue}` : it.text.replace(/\*/g, "");
-        if (st !== "placeholder") { const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; t.append(s); }
+        dot.title = STATE_LABEL[st];   // the state in words lives in the open line; here the dot carries it
         row.append(dot, t);
       }
       row.append(flagButton(it));
@@ -899,6 +898,8 @@ registerProcessor("tne-tap", Tap);`;
   /** Play from the selected line on, line after line, until the end or Stop. */
   async function playFrom(i) {
     if (!ep || mode !== "idle") return;
+    await refreshIfChanged();
+    i = sel;
     await audio.output();
     const me = run = { kind: "play", cancelled: false };
     setMode("playing");
@@ -914,6 +915,9 @@ registerProcessor("tne-tap", Tap);`;
       and plays on to the next flagged narrator line; the run ends when none are left, or at Stop. */
   async function recordFrom(i) {
     if (!ep || mode !== "idle" || !canRecord(ep.seq[i])) return;
+    await refreshIfChanged();
+    i = sel;
+    if (!canRecord(ep.seq[i])) return;
     await ensureHeadphones();
     // a run of takes can outlast the hour a sign-in lasts: renew it now, from this tap, rather than mid-run
     if (!ep.demo && drive.left() < RENEW_S) { try { await drive.auth(); } catch (_) {} }
@@ -1113,6 +1117,23 @@ registerProcessor("tne-tap", Tap);`;
     return out;
   }
 
+  /** Has the notebook run since the episode was opened? Its manifest.json changes on every run. If so, open the episode
+      again (same selection), so new clips, recordings and flags show, and a re-voiced line plays its new clip. */
+  async function refreshIfChanged(force = false) {
+    if (!ep || ep.demo || mode !== "idle" || !drive.valid()) return;
+    if (!force && Date.now() - (ep.checked || 0) < 20000) return;
+    ep.checked = Date.now();
+    try {
+      const f = await drive.child(ep.id, "manifest.json");
+      if (!f || f.modifiedTime === ep.manifestTime || mode !== "idle") return;
+      const keep = ep.seq[sel] && ep.seq[sel].key;
+      await openEpisode(ep.id, ep.name);
+      const i = ep.seq.findIndex(it => it.key === keep);
+      if (i >= 0) moveTo(i, true);
+      banner("Updated from the notebook's latest run.");
+    } catch (_) {}
+  }
+
   async function openEpisode(id, name) {
     banner("Opening the episode…");
     const files = await drive.children(id);
@@ -1129,7 +1150,8 @@ registerProcessor("tne-tap", Tap);`;
     const flagsF = by("flags.json");
     if (flagsF) { try { const d = JSON.parse(await drive.text(flagsF.id)); if (d && d.format === "trail-flags/1" && d.lines) userFlags = d.lines; } catch (_) {} }
     banner("");
-    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false, onDrive, userFlags });
+    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false, onDrive, userFlags,
+      manifestTime: manF.modifiedTime, checked: Date.now() });
     local.set("tne.episode", id);
     resumeUploads();
   }
@@ -1252,6 +1274,7 @@ NARRATOR: That one always helps me think.
         e.preventDefault(); select(sel + (e.key === "ArrowDown" ? 1 : -1), true);
       }
     });
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshIfChanged(true); });
     window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "finishing" || uploads.list.length) { e.preventDefault(); e.returnValue = ""; } });
     setInterval(meter, 100);
     setMode("idle");
