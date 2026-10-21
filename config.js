@@ -1,7 +1,7 @@
 // Settings for this deployment. The OAuth client ID is public by design; there are no secrets here.
 window.TNE_CONFIG = {
   // Google Cloud → APIs & Services → Credentials → OAuth client ID (Web application). See README.md.
-  clientId: "",
+  clientId: "271774184563-49qo8i17v54p880fedjs5f9lhnpqva1u.apps.googleusercontent.com",
   // The folder in My Drive that holds episodes/ (the voice notebook's DRIVE_ROOT).
   driveRoot: "hiker-engine",
 };
