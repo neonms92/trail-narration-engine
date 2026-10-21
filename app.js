@@ -1296,6 +1296,36 @@ NARRATOR: That one always helps me think.
     }
   }
 
+  /** "Updated <date>" in the header: the newest commit on the repo serving this page, or failing that, when Pages deployed it. */
+  async function showVersion() {
+    const el = $("ver");
+    const fmt = d => d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
+    const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = m && location.pathname.split("/")[1];
+    let info = null;
+    try { info = JSON.parse(sessionStorage.getItem("tne.ver") || "null"); } catch (_) {}
+    if (!info && m && repo) {
+      try {
+        const r = await fetch(`https://api.github.com/repos/${m[1]}/${repo}/commits?per_page=1`, { headers: { Accept: "application/vnd.github+json" } });
+        if (r.ok) { const c = (await r.json())[0]; info = { date: c.commit.committer.date, sha: c.sha.slice(0, 7), url: c.html_url }; }
+      } catch (_) {}
+    }
+    if (!info) {
+      try {
+        const r = await fetch("app.js", { method: "HEAD", cache: "no-store" });
+        const lm = r.headers.get("Last-Modified");
+        if (lm) info = { date: new Date(lm).toISOString() };
+      } catch (_) {}
+    }
+    if (!info) return;
+    try { sessionStorage.setItem("tne.ver", JSON.stringify(info)); } catch (_) {}
+    el.textContent = `Updated ${fmt(new Date(info.date))}`;
+    if (info.url) el.href = info.url; else el.removeAttribute("href");
+    el.title = info.sha ? `The latest commit to the recorder (${info.sha})` : "When this copy of the recorder was published";
+    el.hidden = false;
+  }
+
   boot();
+  showVersion();
   window.__tne = { parseScript, attachManifest, buildTurns, norm, wav24, encodeTake, state: () => ({ mode, sel, ep, take }) };
 })();
