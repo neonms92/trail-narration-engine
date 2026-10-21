@@ -671,7 +671,7 @@ registerProcessor("tne-tap", Tap);`;
       $("flagLine").textContent = it.text.replace(/\*/g, "");
       $("flagNote").value = current;
       $("flagUnflag").hidden = !((u && u.flag) || (custom && !(u && u.revert)));
-      $("flagUnflag").textContent = custom ? "Unflag and restore the mood's direction" : "Unflag";
+      $("flagUnflag").title = custom ? "Unflag, and restore the mood's direction and the original take" : "Unflag";
       $("flagOk").onclick = () => finish({ flag: $("flagNote").value.trim() });
       $("flagUnflag").onclick = () => finish({ unflag: true });
       $("flagCancel").onclick = () => finish(null);
