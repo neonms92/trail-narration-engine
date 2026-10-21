@@ -1098,6 +1098,21 @@ registerProcessor("tne-tap", Tap);`;
     await openEpisode(pick.id, pick.name);
   }
 
+  /** Takes on Drive the notebook hasn't processed yet, read from their sidecars: {line key: take id}, newest take winning.
+      This, not the browser's own memory, is what says a line is saved, so it holds on any device or browser. */
+  async function savedOnDrive(recId, manifest) {
+    const done = manifest.takes || {};
+    const sides = (await drive.children(recId)).filter(f => f.name.endsWith(".json") && !done[f.name.slice(0, -5)]);
+    const takes = (await Promise.all(sides.map(f => drive.text(f.id).then(JSON.parse).catch(() => null))))
+      .filter(t => t && t.format === "trail-take/1").sort((a, b) => String(a.recorded).localeCompare(String(b.recorded)));
+    const out = {};
+    for (const t of takes) {
+      if (t.kind === "ocarina") out[`cue:${t.cue}`] = t.take;
+      else for (const l of t.lines || []) out[l.id || "t:" + norm(l.text)] = t.take;
+    }
+    return out;
+  }
+
   async function openEpisode(id, name) {
     banner("Opening the episode…");
     const files = await drive.children(id);
@@ -1109,8 +1124,9 @@ registerProcessor("tne-tap", Tap);`;
     const clips = {};
     if (clipsF) for (const f of await drive.children(clipsF.id)) clips[f.name] = f;
     const recF = files.find(f => f.name === "recordings" && f.mimeType === FOLDER) || null;
+    const onDrive = recF ? await savedOnDrive(recF.id, manifest) : {};
     banner("");
-    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false });
+    await setEpisode({ id, name, script, manifest, clips, recordings: recF, demo: false, onDrive });
     local.set("tne.episode", id);
     resumeUploads();
   }
@@ -1120,7 +1136,8 @@ registerProcessor("tne-tap", Tap);`;
     ep.items = parseScript(e.script);
     attachManifest(ep.items, e.manifest.lines || []);
     ep.turns = buildTurns(ep.items);
-    ep.saved = local.get(savedKey(), {});
+    // Drive's sidecars, plus this browser's own list for takes still uploading or uploaded a moment ago
+    ep.saved = { ...local.get(savedKey(), {}), ...(e.onDrive || {}) };
     ep.flags = notebookFlags(e.manifest);
     ep.scriptSha1 = await sha1Hex(e.script);
     const lastKey = local.get(`tne.turn.${ep.name}`, null);
