@@ -712,9 +712,17 @@ registerProcessor("tne-tap", Tap);`;
       return c && c.clip ? { entry: c } : null;
     }
     if (isClaude(it)) return { entry: it.entry || { text: it.text, clip: "" } };
-    if (lineState(it) === "saved") return { take: ep.saved[it.key] };
+    if (lineState(it) === "saved" && !sharedTake(it)) return { take: ep.saved[it.key] };
     if (it.entry && it.entry.clip && !ep.demo) return { entry: it.entry };
     return null;
+  }
+  /** True for a later line of a take that covers several lines (takes recorded a turn at a time, before takes were one
+      line each). The raw take plays with its first line; this line plays its own clip in use until the notebook splits it. */
+  function sharedTake(it) {
+    const t = ep.saved[it.key];
+    if (!t) return false;
+    for (let k = it.seqIndex - 1; k >= 0; k--) if (ep.saved[ep.seq[k].key] === t) return true;
+    return false;
   }
   async function bufferFor(it) {
     const src = itemSource(it);
@@ -796,6 +804,7 @@ registerProcessor("tne-tap", Tap);`;
       lab.textContent = STATE_LABEL[st]; p.append(lab);
       if (st === "review" && it.entry.spoken) note(p, `Last take said: “${it.entry.spoken}”`);
       if (st === "unvoiced") note(p, "Not in the manifest yet; run the voice notebook so this line gets its id.");
+      if (st === "saved" && sharedTake(it)) note(p, "Saved in one take with the line above. Until the notebook splits it, this line plays its current clip; flag it to record it on its own.");
       if (st === "flagged") note(p, ep.flags[it.entry.id].message + (it.entry.source === "recording" ? " An earlier take is still in use." : ""));
     }
     box.append(p);
@@ -876,10 +885,8 @@ registerProcessor("tne-tap", Tap);`;
     try { sessionStorage.setItem("tne.phones", "1"); } catch (_) {}
   }
 
-  /** Play one line's audio within a run; false when the run was stopped. A raw take covering several lines plays once. */
+  /** Play one line's audio within a run; false when the run was stopped. */
   async function playItem(me, it, from = 0) {
-    const src = itemSource(it);
-    if (src && src.take) { if (me.lastTake === src.take) return !me.cancelled; me.lastTake = src.take; } else me.lastTake = null;
     let b = null;
     try { b = await bufferFor(it); }
     catch (e) { if (e instanceof AuthError) { signInAgain(); me.cancelled = true; return false; } banner(`Couldn't play a line (${e.message || e}); going on.`, true); }
@@ -913,7 +920,7 @@ registerProcessor("tne-tap", Tap);`;
       return;
     }
     banner(""); showMic();
-    const me = run = { kind: "record", cancelled: false, done: null, lastTake: null };
+    const me = run = { kind: "record", cancelled: false, done: null };
     let k = i, takes = 0;
     setMode("listening");
     moveTo(k);
@@ -938,7 +945,6 @@ registerProcessor("tne-tap", Tap);`;
       takes++;
       // play on through what's already fine, to the next flagged narrator line
       setMode("listening");
-      me.lastTake = null;
       let next = -1;
       for (let j = k + 1; j < ep.seq.length; j++) {
         if (canRecord(ep.seq[j])) { next = j; break; }
