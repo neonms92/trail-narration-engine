@@ -103,6 +103,9 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px;
 .bar .lvl { position: absolute; top: 4px; bottom: 4px; left: 0; width: 0; border-radius: 6px; background: var(--moss); transition: width .08s linear; }
 .bar .lvl.hot { background: var(--warn); }
 .meter .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.meter .mic { gap: 8px; }
+.meter .mic select { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); max-width: 100%; min-width: 0; flex: 0 1 auto; }
+#micNote.warn { color: var(--warn); font-weight: 600; }
 .clip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .clip i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
 .clip.on i { background: var(--rec); }
@@ -172,6 +175,11 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
       <span class="sub" id="lufs">— LUFS</span>
       <span class="clip" id="clipLight"><i></i>Clip</span>
       <span class="sub" id="bandInfo"></span>
+    </div>
+    <div class="row mic">
+      <label for="mic" class="sub">Mic</label>
+      <select id="mic" aria-describedby="micNote"><option value="">Automatic (headset first)</option></select>
+      <span class="sub" id="micNote"></span>
     </div>
   </div>
   <div class="knobs">

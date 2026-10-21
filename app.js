@@ -281,15 +281,71 @@ class Tap extends AudioWorkletProcessor {
 }
 registerProcessor("tne-tap", Tap);`;
 
+  // ---------- which microphone ----------
+  // Android names its inputs once the page has mic permission ("USB headset", "Headset microphone", "Speakerphone"...).
+  // With no choice saved, a headset is preferred over the phone's own mic, since a browser's default doesn't always follow the plug.
+  const MIC_BASE = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: RATE };
+  const HEADSET = /usb|headset|headphone|wired|bluetooth|jack|adapter|external/i;
+  const BUILT_IN = /built.?in|speakerphone|bottom|top|back|front|internal|phone|earpiece|default/i;
+  async function micInputs() {
+    try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput" && d.deviceId); } catch (_) { return []; }
+  }
+  const gum = id => navigator.mediaDevices.getUserMedia({ audio: id ? { ...MIC_BASE, deviceId: { exact: id } } : MIC_BASE });
+  async function openMic(wantId) {
+    if (wantId) { try { return await gum(wantId); } catch (e) { if (e && e.name === "NotAllowedError") throw e; } }  // a saved mic that's unplugged: fall back
+    const s = await gum("");
+    if (wantId) return s;
+    const cur = s.getAudioTracks()[0].getSettings().deviceId;
+    const head = (await micInputs()).find(d => d.deviceId !== "default" && d.deviceId !== cur && HEADSET.test(d.label) && !/speakerphone/i.test(d.label));
+    if (!head || HEADSET.test(s.getAudioTracks()[0].label)) return s;
+    try { const h = await gum(head.deviceId); for (const t of s.getTracks()) t.stop(); return h; } catch (_) { return s; }
+  }
+  /** The input's own name; "Default" is resolved to the device behind it when the browser says which. */
+  async function micName(stream) {
+    const tr = stream.getAudioTracks()[0], set = tr.getSettings();
+    let name = tr.label || "";
+    if (!name || /^default/i.test(name)) {
+      const ins = await micInputs();
+      const real = ins.find(d => d.deviceId !== "default" && d.groupId && d.groupId === set.groupId && !/^default/i.test(d.label));
+      if (real) name = real.label;
+    }
+    return name.replace(/^default\s*-\s*/i, "") || "unnamed microphone";
+  }
+  async function showMic() {
+    const sel = $("mic"), note = $("micNote");
+    if (!sel) return;
+    const ins = await micInputs();
+    const live = audio.stream && audio.stream.getAudioTracks()[0];
+    const curId = live ? live.getSettings().deviceId : local.get("tne.mic", "");
+    sel.replaceChildren();
+    const auto = document.createElement("option"); auto.value = ""; auto.textContent = "Automatic (headset first)"; sel.append(auto);
+    for (const d of ins) {
+      if (d.deviceId === "default") continue;
+      const o = document.createElement("option"); o.value = d.deviceId; o.textContent = d.label || "Microphone (name shown after the first take)"; sel.append(o);
+    }
+    sel.value = local.get("tne.mic", "") && [...sel.options].some(o => o.value === local.get("tne.mic", "")) ? local.get("tne.mic", "") : "";
+    if (live) {
+      const name = audio.micLabel, phone = !HEADSET.test(name) && BUILT_IN.test(name);
+      note.textContent = `Recording from: ${name}`;
+      note.classList.toggle("warn", phone);
+      note.title = phone ? "This looks like the phone's own mic. Check the headset is plugged in all the way, or pick it above." : "";
+      if (!sel.value) [...sel.options].forEach(o => { if (o.value === curId) o.textContent += " — in use"; });
+    } else {
+      note.textContent = ins.some(d => d.label) ? "Opens on the next take" : "The mic's name shows once the first take opens it";
+      note.classList.remove("warn");
+    }
+  }
+
   const audio = {
     ctx: null, stream: null, raw: null, kw: null, cueGain: null, dingGain: null, playing: [],
     chunks: [], recording: false, flushed: null, msWindow: [], peakUntil: 0, recSamples: 0,
+    micLabel: "",
     async open() {
       if (this.ctx) { if (this.ctx.state === "suspended") await this.ctx.resume(); return; }
       const ctx = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: RATE },
-      });
+      this.stream = await openMic(local.get("tne.mic", ""));
+      this.micLabel = await micName(this.stream);
+      this.stream.getAudioTracks()[0].onended = () => { this.close(); showMic(); banner("The microphone went away (unplugged?). The next take opens it again.", true); };
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
       await ctx.audioWorklet.addModule(url);
       const src = ctx.createMediaStreamSource(this.stream);
@@ -323,6 +379,13 @@ registerProcessor("tne-tap", Tap);`;
       if (!this.msWindow.length) return null;
       const ms = this.msWindow.reduce((a, b) => a + b, 0) / this.msWindow.length;
       return -0.691 + 10 * Math.log10(ms + 1e-12);
+    },
+    /** Let go of the mic and the audio graph, so the next take opens the chosen mic afresh. */
+    close() {
+      this.stopPlayback();
+      if (this.stream) for (const t of this.stream.getTracks()) { t.onended = null; t.stop(); }
+      if (this.ctx) this.ctx.close().catch(() => {});
+      this.ctx = this.stream = this.raw = this.kw = null; this.micLabel = ""; this.msWindow = [];
     },
     stopPlayback() { for (const s of this.playing) { try { s.onended = null; s.stop(); } catch (_) {} } this.playing = []; },
     play(buffer, offset = 0, gain = this.cueGain) {
@@ -617,6 +680,7 @@ registerProcessor("tne-tap", Tap);`;
     $("save").disabled = m === "saving";
     $("discard").disabled = m === "saving";
     $("episode").disabled = !ep || m !== "idle";
+    if ($("mic")) $("mic").disabled = !(m === "idle" || m === "review");
   }
 
   function select(i) {
@@ -646,6 +710,7 @@ registerProcessor("tne-tap", Tap);`;
       return;
     }
     banner("");
+    showMic();
     const t = ep.turns[sel];
     setMode("listening");
     let cancelled = false;
@@ -662,7 +727,7 @@ registerProcessor("tne-tap", Tap);`;
     cancelListen = null;
     await audio.ding();
     audio.startRecording();
-    take = { turnKey: t.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value) };
+    take = { turnKey: t.key, rate: audio.ctx.sampleRate, recorded: new Date(), gain: Number($("gain").value), mic: audio.micLabel };
     setMode("recording");
   }
 
@@ -735,6 +800,7 @@ registerProcessor("tne-tap", Tap);`;
     if (turn.kind === "ocarina") base.cue = turn.cueN;
     else base.lines = turn.lines.map(l => l.entry ? { id: l.entry.id, text: l.entry.text } : { text: l.text });
     base.gain_db = t.gain;
+    if (t.mic) base.mic = t.mic;
     base.script_sha1 = ep.scriptSha1;
     return base;
   }
@@ -932,6 +998,19 @@ NARRATOR: That one always helps me think.
   }
 
   function boot() {
+    $("mic").addEventListener("change", () => {
+      local.set("tne.mic", $("mic").value);
+      if (audio.ctx) audio.close();   // idle or review only (the picker is disabled otherwise); a take in review is kept
+      showMic();
+    });
+    try {
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        // plugged in or out between takes: reopen on the next take, so Automatic finds the headset
+        if (audio.ctx && (mode === "idle" || mode === "review") && !local.get("tne.mic", "")) audio.close();
+        showMic();
+      });
+    } catch (_) {}
+    showMic();
     const k = local.get("tne.knobs", null);
     if (k) { $("gain").value = k.gain; $("cueVol").value = k.cue; $("dingVol").value = k.ding; }
     for (const id of ["gain", "cueVol", "dingVol"]) $(id).addEventListener("input", () => { applyVolumes(); meter(); });
