@@ -658,14 +658,24 @@ registerProcessor("tne-tap", Tap);`;
     });
   }
 
-  function askNote(it) {
+  /** The firefly's direction dialog: its one direction (the mood's, or his), loaded for editing.
+      Resolves {flag: direction}, {unflag: true}, or null for Cancel. */
+  function editDirection(it) {
+    const u = ep.userFlags[it.key];
+    const current = u && u.flag && u.direction ? u.direction : (it.entry && it.entry.direction) || "";
+    const custom = !!(it.entry && it.entry.custom_direction);
     return new Promise(res => {
       const d = $("flagDlg");
+      let done = false;
+      const finish = v => { if (done) return; done = true; d.close(); res(v); };
       $("flagLine").textContent = it.text.replace(/\*/g, "");
-      $("flagNote").value = "";
-      $("flagOk").onclick = () => { d.close(); res($("flagNote").value.trim()); };
-      $("flagCancel").onclick = () => { d.close(); res(null); };
-      d.onclose = () => res(null);
+      $("flagNote").value = current;
+      $("flagUnflag").hidden = !((u && u.flag) || (custom && !(u && u.revert)));
+      $("flagUnflag").textContent = custom ? "Unflag and restore the mood's direction" : "Unflag";
+      $("flagOk").onclick = () => finish({ flag: $("flagNote").value.trim() });
+      $("flagUnflag").onclick = () => finish({ unflag: true });
+      $("flagCancel").onclick = () => finish(null);
+      d.onclose = () => finish(null);
       d.showModal();
       $("flagNote").focus();
     });
@@ -674,12 +684,11 @@ registerProcessor("tne-tap", Tap);`;
   async function toggleFlag(it) {
     if (!ep) return;
     if (isClaude(it)) {
-      if (isFlagged(it)) saveFlag(it.key, null);
-      else {
-        const note = await askNote(it);
-        if (note === null) return;
-        saveFlag(it.key, { flag: true, note, at: isoLocal(new Date()) });
-      }
+      const r = await editDirection(it);
+      if (!r) return;
+      const custom = !!(it.entry && it.entry.custom_direction);
+      if (r.unflag) saveFlag(it.key, custom ? { flag: false, revert: true, at: isoLocal(new Date()) } : null);
+      else saveFlag(it.key, { flag: true, ...(r.flag ? { direction: r.flag } : {}), at: isoLocal(new Date()) });
     } else {
       const want = !isFlagged(it);
       saveFlag(it.key, want === autoFlag(it) ? null : { flag: want, at: isoLocal(new Date()) });
@@ -791,9 +800,18 @@ registerProcessor("tne-tap", Tap);`;
       p.className = "claude-line";
       p.textContent = it.text.replace(/\*/g, "");
       lab.textContent = "Firefly"; p.append(lab);
-      const u = ep.userFlags[it.key];
-      if (u && u.flag) note(p, u.note ? `Flagged for a new take: “${u.note}”` : "Flagged for a new take (no note: a fresh seed only).");
-      else if (it.entry && it.entry.note) { const n = document.createElement("span"); n.className = "st"; n.textContent = `Direction note: “${it.entry.note}”`; p.append(n); }
+      const u = ep.userFlags[it.key], e = it.entry || {};
+      const dir = document.createElement("span"); dir.className = "st";
+      if (u && u.flag) {
+        note(p, "Flagged for a new take on the next notebook run.");
+        dir.textContent = `Direction: “${u.direction || e.direction || ""}”`;
+      } else if (u && u.revert) {
+        note(p, "Unflagged: the next notebook run restores the mood's direction and the original take.");
+        dir.textContent = `Direction now: “${e.direction || ""}”`;
+      } else if (e.direction) {
+        dir.textContent = `${e.custom_direction ? "Your direction" : "Direction"}: “${e.direction}”`;
+      }
+      if (dir.textContent) p.append(dir);
     } else if (it.type === "ocarina") {
       p.textContent = `Ocarina song ${it.cue}. Play it through, then press Done.`;
       lab.textContent = STATE_LABEL[cueState(it)]; p.append(lab);
@@ -1203,6 +1221,7 @@ NARRATOR: That one always helps me think.
     const lines = parseScript(DEMO_SCRIPT).filter(i => i.type === "line").map((l, k) => ({
       index: k, id: norm(l.text).replace(/'/g, "").split(" ").slice(0, 5).join("-") + "-demo", speaker: l.speaker, text: l.text,
       clip: "", source: l.speaker === "claude" ? "tts" : "placeholder", lufs: -20,
+      ...(l.speaker === "claude" ? { direction: "Relaxed and even, warm, unhurried." } : {}),
     }));
     await setEpisode({ id: "demo", name: "demo", script: DEMO_SCRIPT, manifest: { lines, cues: [], takes: {} }, clips: {}, demo: true,
       userFlags: local.get("tne.demoFlags", {}) });

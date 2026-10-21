@@ -88,6 +88,9 @@ main { overflow: auto; min-height: 0; }
 .open-turn.claude { border-color: var(--glow); }
 dialog textarea { width: 100%; margin-top: 8px; font: 15px/1.4 var(--ui); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--ink); }
 dialog label { font-size: 14px; color: var(--muted); }
+.dlg-actions { flex-wrap: wrap; }
+.dlg-actions .grow { flex: 1; }
+.unflag { color: var(--rec); border-color: var(--rec); }
 .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--line); }
 .dot.flagged { background: var(--rec); }
 .dot.recorded { background: var(--done); } .dot.saved { background: var(--ok); } .dot.review { background: var(--warn); }
@@ -221,11 +224,16 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
   <div class="row"><button id="phonesOk" type="button" class="primary">They're on</button></div>
 </dialog>
 <dialog id="flagDlg">
-  <h2>Flag the firefly's line</h2>
+  <h2>The firefly's direction</h2>
   <p class="cue" id="flagLine"></p>
-  <label for="flagNote">What's wrong with it? The notebook gives your note to Breeze as direction for a new take. Describe how it should sound; leave it empty for just a fresh take.</label>
-  <textarea id="flagNote" rows="3" placeholder="e.g. slower and warmer, less sing-song"></textarea>
-  <div class="row"><button id="flagCancel" type="button">Cancel</button><button id="flagOk" type="button" class="primary">Flag it</button></div>
+  <label for="flagNote">How should this line sound? Edit the direction; flagging asks the notebook for a new take with it, on a fresh seed.</label>
+  <textarea id="flagNote" rows="4"></textarea>
+  <div class="row dlg-actions">
+    <button id="flagUnflag" type="button" class="unflag" hidden>Unflag</button>
+    <span class="grow"></span>
+    <button id="flagCancel" type="button">Cancel</button>
+    <button id="flagOk" type="button" class="primary">Flag for a new take</button>
+  </div>
 </dialog>
 
 <script src="config.js"></script>
