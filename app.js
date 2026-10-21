@@ -1296,11 +1296,11 @@ NARRATOR: That one always helps me think.
     }
   }
 
-  /** "Updated <date>" in the header: the newest commit on the repo serving this page, or failing that, when Pages deployed it. */
+  /** The date the app was last updated, in the header: the newest commit on the repo serving this page, or failing that, when Pages deployed it. */
   async function showVersion() {
     const el = $("ver");
-    const fmt = d => d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-      ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
+    const p2 = n => String(n).padStart(2, "0");
+    const fmt = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = m && location.pathname.split("/")[1];
     let info = null;
     try { info = JSON.parse(sessionStorage.getItem("tne.ver") || "null"); } catch (_) {}
@@ -1319,9 +1319,9 @@ NARRATOR: That one always helps me think.
     }
     if (!info) return;
     try { sessionStorage.setItem("tne.ver", JSON.stringify(info)); } catch (_) {}
-    el.textContent = `Updated ${fmt(new Date(info.date))}`;
+    el.textContent = fmt(new Date(info.date));   // local time
     if (info.url) el.href = info.url; else el.removeAttribute("href");
-    el.title = info.sha ? `The latest commit to the recorder (${info.sha})` : "When this copy of the recorder was published";
+    el.title = "App last updated";
     el.hidden = false;
   }
 
