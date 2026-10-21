@@ -1313,32 +1313,44 @@ NARRATOR: That one always helps me think.
     }
   }
 
-  /** The date the app was last updated, in the header: the newest commit on the repo serving this page, or failing that, when Pages deployed it. */
+  /** The date the app was last updated, in the header: the newest commit on the repo serving this page, fetched on
+      every load. GitHub Pages lets a browser keep its files for up to 10 minutes, so when the copy running here was
+      published before that commit, the date is marked and tapping it loads the new copy. */
   async function showVersion() {
     const el = $("ver");
     const p2 = n => String(n).padStart(2, "0");
     const fmt = d => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     const m = location.hostname.match(/^([^.]+)\.github\.io$/), repo = m && location.pathname.split("/")[1];
-    let info = null;
-    try { info = JSON.parse(sessionStorage.getItem("tne.ver") || "null"); } catch (_) {}
-    if (!info && m && repo) {
+    let commit = null, running = null;
+    if (m && repo) {
       try {
-        const r = await fetch(`https://api.github.com/repos/${m[1]}/${repo}/commits?per_page=1`, { headers: { Accept: "application/vnd.github+json" } });
-        if (r.ok) { const c = (await r.json())[0]; info = { date: c.commit.committer.date, sha: c.sha.slice(0, 7), url: c.html_url }; }
+        const r = await fetch(`https://api.github.com/repos/${m[1]}/${repo}/commits?per_page=1`, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
+        if (r.ok) { const c = (await r.json())[0]; commit = { date: new Date(c.commit.committer.date), url: c.html_url }; }
       } catch (_) {}
     }
-    if (!info) {
-      try {
-        const r = await fetch("app.js", { method: "HEAD", cache: "no-store" });
-        const lm = r.headers.get("Last-Modified");
-        if (lm) info = { date: new Date(lm).toISOString() };
-      } catch (_) {}
-    }
-    if (!info) return;
-    try { sessionStorage.setItem("tne.ver", JSON.stringify(info)); } catch (_) {}
-    el.textContent = fmt(new Date(info.date));   // local time
-    if (info.url) el.href = info.url; else el.removeAttribute("href");
+    try {
+      const r = await fetch("app.js", { method: "HEAD" });   // the copy this browser has: when Pages published it
+      const lm = r.headers.get("Last-Modified");
+      if (lm) running = new Date(lm);
+    } catch (_) {}
+    const shown = commit ? commit.date : running;
+    if (!shown) return;
+    el.textContent = fmt(shown);   // local time
     el.title = "App last updated";
+    el.classList.remove("stale");
+    el.onclick = null;
+    if (commit && running && running.getTime() < commit.date.getTime() - 5000) {
+      el.classList.add("stale");
+      el.textContent = `${fmt(shown)} ↻`;
+      el.title = "App last updated. This page is an older copy: tap to load the update.";
+      el.href = "#";
+      el.onclick = async e => {
+        e.preventDefault();
+        if (mode !== "idle" || uploads.list.length) { banner("Load the update once recording and uploads are done.", true); return; }
+        try { await Promise.all([location.pathname, "app.js", "config.js"].map(u => fetch(u, { cache: "reload" }))); } catch (_) {}
+        location.reload();
+      };
+    } else if (commit) { el.href = commit.url; } else el.removeAttribute("href");
     el.hidden = false;
   }
 
