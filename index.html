@@ -7,8 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: a booth. Script rail on the left (below on phones), the current turn large in the middle,
-   the transport and meter pinned to the bottom within thumb's reach. */
+/* Layout: a booth. The script is one list; the turn you're on opens in place, large, with its review.
+   The transport and a slim meter are pinned to the bottom within thumb's reach; the rest folds into Settings. */
 :root {
   --bg: #EDEFE8; --panel: #F7F8F3; --ink: #18211B; --muted: #5B675E; --line: #CCD5C9; --field: #E2E8DE;
   --moss: #3E6A49; --glow: #C38712; --glow-soft: #F1E2B8; --rec: #B3261E; --rec-soft: #F6D9D5;
@@ -46,23 +46,34 @@ header .grow { flex: 1; }
 header select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); max-width: 60vw; }
 .who { font-size: 13px; color: var(--muted); }
 
-main { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; min-height: 0; }
-#rail { overflow: auto; border-right: 1px solid var(--line); padding: 12px 10px 24px; min-width: 0; }
-#stage { overflow: auto; padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px 28px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+main { overflow: auto; min-height: 0; }
+#stage { max-width: 820px; margin: 0 auto; padding: 14px max(16px, env(safe-area-inset-right, 0px)) 28px max(16px, env(safe-area-inset-left, 0px));
+  display: flex; flex-direction: column; gap: 12px; }
+#rail { min-width: 0; }
 @media (max-width: 760px) {
-  main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-  #rail { order: 2; max-height: 22vh; border-right: 0; border-top: 1px solid var(--line); }
-  #stage { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-top: 14px; padding-bottom: 14px; }
-  #lines { font-size: 1.35rem; }
-  header select { max-width: 100%; flex: 1 1 100%; order: 3; }
+  #lines { font-size: 1.3rem; }
+  header { padding-top: 8px; padding-bottom: 8px; gap: 8px 10px; }
+  header h1 { font-size: .9rem; }
+  header button { padding: 5px 10px; font-size: 14px; }
+  header .who { display: none; }
+  header select { max-width: 100%; flex: 1 1 100%; order: 3; padding: 5px 8px; }
+  footer #big { min-width: 118px; }
+  .transport { gap: 8px; }
+  body.signed-in #demo { display: none; }
 }
+/* the selected turn, opened in place in the script */
+.open-turn { display: grid; gap: 12px; margin: 4px 0 8px; padding: 12px 14px; border: 1.5px solid var(--moss); border-radius: 12px; background: var(--panel);
+  scroll-margin: 12px; }
+.item.cue-sel { background: var(--glow-soft); }
+.mine { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font: 13px var(--ui); padding: 4px 10px; }
 .sec { font: 700 11.5px var(--ui); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin: 14px 6px 4px; }
-.item { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.item { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
 .item:hover { background: var(--field); }
 .item.sel { border-color: var(--moss); background: var(--field); }
 .item .t { font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
 .item.claude .t { color: var(--firefly); font-style: italic; }
 .item.claude { cursor: default; grid-template-columns: 18px 1fr; }
+.item .play.me { color: var(--moss); }
 .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--line); }
 .dot.recorded { background: var(--ok); } .dot.saved { background: var(--glow); } .dot.review { background: var(--warn); }
 .dot.placeholder { background: var(--line); } .dot.unvoiced { background: transparent; border: 2px dashed var(--muted); }
@@ -75,23 +86,26 @@ main { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; min-heigh
 #lines p { margin: 0; text-wrap: pretty; }
 #lines p.missing { color: var(--muted); }
 #lines .note { font: 14px var(--ui); color: var(--warn); display: block; margin-top: 4px; }
+#lines .st { font: 12px var(--ui); color: var(--muted); display: block; margin-top: 2px; }
 .banner { padding: 10px 14px; border-radius: 8px; background: var(--glow-soft); max-width: 70ch; }
 .banner.bad { background: var(--rec-soft); }
-#review { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); max-width: 760px; }
+#review { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 #wave { width: 100%; height: 96px; display: block; background: var(--field); border-radius: 6px; }
 #review .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .sub { font: 12.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 footer { border-top: 1px solid var(--line); background: var(--panel);
   padding: 12px max(16px, env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
-  display: grid; grid-template-columns: auto 1fr auto; gap: 14px 22px; align-items: center; }
+  display: grid; gap: 8px; }
 @media (max-width: 760px) {
-  footer { grid-template-columns: 1fr; gap: 10px; padding-top: 10px; }
-  #big { min-height: 56px; min-width: 140px; }
-  .knobs { grid-template-columns: repeat(3, auto 1fr); gap: 4px 6px; }
-  .knobs input { width: 100%; min-width: 0; }
-  .knobs output { display: none; }
+  footer { padding-top: 8px; }
+  #big { min-height: 56px; min-width: 130px; }
 }
+body.signed-in #signin { display: none; }
+#settingsBtn { margin-left: auto; padding: 6px 10px; font-size: 14px; }
+#settingsBtn[aria-expanded="true"] { background: var(--field); }
+#settings { display: grid; gap: 10px; padding-top: 4px; border-top: 1px dashed var(--line); }
+#settings .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .transport { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .runon { display: inline-flex; gap: 6px; align-items: center; }
 #big { min-width: 168px; min-height: 64px; font: 700 1.25rem var(--ui); border-radius: 14px; background: var(--moss); color: var(--panel); border-color: var(--moss); }
@@ -99,19 +113,19 @@ footer { border-top: 1px solid var(--line); background: var(--panel);
 #big.listening { background: var(--glow); border-color: var(--glow); color: #1d1606; }
 kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); }
 .meter { display: grid; gap: 6px; min-width: 0; }
-.bar { position: relative; height: 18px; border-radius: 9px; background: var(--field); overflow: hidden; }
+.bar { position: relative; height: 12px; border-radius: 6px; background: var(--field); overflow: hidden; }
 .bar .band { position: absolute; top: 0; bottom: 0; background: var(--glow-soft); border-left: 2px solid var(--glow); border-right: 2px solid var(--glow); }
-.bar .lvl { position: absolute; top: 4px; bottom: 4px; left: 0; width: 0; border-radius: 6px; background: var(--moss); transition: width .08s linear; }
+.bar .lvl { position: absolute; top: 3px; bottom: 3px; left: 0; width: 0; border-radius: 6px; background: var(--moss); transition: width .08s linear; }
 .bar .lvl.hot { background: var(--warn); }
 .meter .row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
 .meter .mic { gap: 8px; }
-.meter .mic select { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); max-width: 100%; min-width: 0; flex: 0 1 auto; }
+#settings .mic select { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); max-width: 100%; min-width: 0; flex: 0 1 auto; }
 #micNote.warn { color: var(--warn); font-weight: 600; }
 .clip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .clip i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
 .clip.on i { background: var(--rec); }
-.knobs { display: grid; grid-template-columns: auto 120px auto; gap: 4px 8px; align-items: center; font-size: 13px; color: var(--muted); }
-.knobs input { width: 120px; accent-color: var(--moss); }
+.knobs { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); max-width: 520px; }
+.knobs input { width: 100%; min-width: 0; accent-color: var(--moss); }
 .knobs output { font: 12px var(--mono); font-variant-numeric: tabular-nums; min-width: 4.5em; }
 
 dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); max-width: min(520px, calc(100vw - 32px)); padding: 20px; }
@@ -135,17 +149,17 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
 </header>
 
 <main>
-  <nav id="rail" aria-label="Script"></nav>
-  <section id="stage" aria-live="polite">
+  <section id="stage">
     <div class="empty" id="welcome">
       <h2>Ready when you are.</h2>
       <p>Sign in with Google to open an episode from <code>My Drive/hiker-engine/episodes</code>, or try the demo, which records locally and saves nothing to Drive.</p>
       <p>Headphones on: the firefly and the ding play only in your ears, so they stay out of the take.</p>
     </div>
-    <div id="banner" class="banner" hidden></div>
-    <div id="turn" hidden>
-      <div class="cue" id="cue" hidden><small>Firefly</small><span id="cueText"></span></div>
-    </div>
+    <div id="banner" class="banner" hidden aria-live="polite"></div>
+    <nav id="rail" aria-label="Script"></nav>
+  </section>
+  <!-- the open turn's parts; renderRail moves them into the selected turn's panel -->
+  <div id="pool" hidden>
     <div id="lines" hidden></div>
     <div id="review" hidden>
       <canvas id="wave" width="1400" height="192" aria-label="Waveform of the take"></canvas>
@@ -161,7 +175,7 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
         <a id="download" hidden>Download take</a>
       </div>
     </div>
-  </section>
+  </div>
 </main>
 
 <footer>
@@ -169,14 +183,16 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
     <button id="big" type="button" disabled>Take</button>
     <button id="retake" type="button" disabled>Retake <kbd>R</kbd></button>
     <span class="sub" id="clock">0:00.0</span>
-    <label class="sub runon"><input type="checkbox" id="runOn" checked> Run on to the next line</label>
+    <span class="clip" id="clipLight"><i></i>Clip</span>
     <span class="sub" id="uploads" aria-live="polite"></span>
+    <button id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings">Settings ▴</button>
   </div>
   <div class="meter">
     <div class="bar" aria-hidden="true"><div class="band" id="band"></div><div class="lvl" id="lvl"></div></div>
+  </div>
+  <div id="settings" hidden>
     <div class="row">
       <span class="sub" id="lufs">— LUFS</span>
-      <span class="clip" id="clipLight"><i></i>Clip</span>
       <span class="sub" id="bandInfo"></span>
     </div>
     <div class="row mic">
@@ -184,11 +200,12 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
       <select id="mic" aria-describedby="micNote"><option value="">Automatic (headset first)</option></select>
       <span class="sub" id="micNote"></span>
     </div>
-  </div>
-  <div class="knobs">
+    <div class="row"><label class="sub runon"><input type="checkbox" id="runOn" checked> Run on to the next line</label></div>
+    <div class="knobs">
     <label for="gain">Gain</label><input id="gain" type="range" min="-12" max="12" step="0.5" value="0"><output id="gainOut">0.0 dB</output>
     <label for="cueVol">Firefly</label><input id="cueVol" type="range" min="0" max="1.5" step="0.05" value="1"><output id="cueOut">100%</output>
     <label for="dingVol">Ding</label><input id="dingVol" type="range" min="0" max="1" step="0.05" value="0.5"><output id="dingOut">50%</output>
+    </div>
   </div>
 </footer>
 

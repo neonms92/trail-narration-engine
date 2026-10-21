@@ -608,25 +608,58 @@ registerProcessor("tne-tap", Tap);`;
 
   // ---------- rendering ----------
 
+  /** Where a narrator line's (or ocarina song's) own audio is: a clip the notebook cut, or a saved take it hasn't seen yet. */
+  function mineSource(l) {
+    const st = lineState(l);
+    if (st === "saved") return { take: ep.saved[lineKey(l)] };
+    if ((st === "recorded" || st === "review") && l.entry.clip) return { entry: l.entry };
+    return null;
+  }
+  function cueSource(t) {
+    const st = cueState(t);
+    if (st === "saved") return { take: ep.saved[t.key] };
+    const c = (ep.manifest.cues || []).find(c => c.cue === t.cueN);
+    return st === "recorded" && c && c.clip ? { entry: c } : null;
+  }
+  function mineButton(src, cls, label) {
+    const b = document.createElement("button"); b.type = "button"; b.className = cls;
+    b.setAttribute("aria-label", label); b.title = label;
+    b.textContent = cls === "mine" ? "▶ Play my take" : "▶";
+    b.addEventListener("click", e => { e.stopPropagation(); playMine(src); });
+    return b;
+  }
+
+  /** The script as one list. The selected turn opens in place: its lines large, then the review of a take. */
   function renderRail() {
-    const rail = $("rail");
+    const rail = $("rail"), pool = $("pool");
+    pool.append($("lines"), $("review"));   // keep them in the document while the list is rebuilt
     rail.textContent = "";
     if (!ep) return;
+    const cur = ep.turns[sel];
+    let panel = null;
     for (const it of ep.items) {
       if (it.type === "section") {
         const h = document.createElement("div"); h.className = "sec"; h.textContent = it.title; rail.append(h); continue;
       }
+      if (cur && it.type !== "section" && it.speaker !== "claude" && it.turn === cur) {
+        if (!panel) {
+          panel = document.createElement("div"); panel.className = "open-turn"; panel.id = "openTurn";
+          panel.append($("lines"), $("review"));
+          rail.append(panel);
+        }
+        continue;
+      }
       const row = document.createElement("div");
       if (it.type === "ocarina") {
         const t = it.turn, st = cueState(t);
-        row.className = "item" + (ep.turns[sel] === t ? " sel" : "");
-        row.tabIndex = 0;
+        row.className = "item"; row.tabIndex = 0;
         row.innerHTML = `<span class="dot ${st}"></span><span class="t"></span>`;
         row.querySelector(".t").textContent = `Ocarina song ${t.cueN}`;
         const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; row.querySelector(".t").append(s);
+        const src = cueSource(t); if (src) row.append(mineButton(src, "play me", "Play my take"));
         row.addEventListener("click", () => select(ep.turns.indexOf(t)));
       } else if (it.speaker === "claude") {
-        row.className = "item claude";
+        row.className = "item claude" + (cur && cur.cue === it ? " cue-sel" : "");
         const b = document.createElement("button"); b.className = "play"; b.type = "button"; b.textContent = "▶";
         b.setAttribute("aria-label", "Play the firefly's line");
         b.addEventListener("click", async e => { e.stopPropagation(); await playCueOnly(it); });
@@ -634,37 +667,44 @@ registerProcessor("tne-tap", Tap);`;
         row.append(b, t);
       } else {
         const st = lineState(it);
-        row.className = "item" + (ep.turns[sel] === it.turn ? " sel" : "");
-        row.tabIndex = 0;
+        row.className = "item"; row.tabIndex = 0;
         row.innerHTML = `<span class="dot ${st}"></span><span class="t"></span>`;
         row.querySelector(".t").textContent = it.text.replace(/\*/g, "");
         if (st !== "placeholder") { const s = document.createElement("span"); s.className = "state"; s.textContent = STATE_LABEL[st]; row.querySelector(".t").append(s); }
+        const src = mineSource(it); if (src) row.append(mineButton(src, "play me", "Play my take"));
         row.addEventListener("click", () => select(ep.turns.indexOf(it.turn)));
       }
       row.addEventListener("keydown", e => { if (e.key === "Enter" && row.tabIndex === 0 && mode === "idle") { e.stopPropagation(); row.click(); } });
       rail.append(row);
     }
-    const s = rail.querySelector(".item.sel");
-    if (s) s.scrollIntoView({ block: "nearest" });
+    // bring the open turn into view, with the firefly's line above it when there is one
+    const cueRow = rail.querySelector(".item.cue-sel");
+    const target = cueRow || panel;
+    // only when the selection moves, so an upload finishing doesn't yank the list while you browse it
+    const at = `${ep.name}:${sel}`;
+    if (target && at !== renderRail.at) { renderRail.at = at; requestAnimationFrame(() => target.scrollIntoView({ block: "start", behavior: "smooth" })); }
   }
 
   function renderTurn() {
     const t = ep && ep.turns[sel];
     $("welcome").hidden = !!ep;
-    $("turn").hidden = $("lines").hidden = !t;
+    $("lines").hidden = !t;
     if (!t) return;
-    $("cue").hidden = !t.cue;
-    if (t.cue) $("cueText").textContent = t.cue.text;
     const box = $("lines"); box.textContent = "";
     if (t.kind === "ocarina") {
-      const p = document.createElement("p"); p.textContent = `Ocarina song ${t.cueN}. Play it through, then press Done.`; box.append(p);
+      const p = document.createElement("p"); p.textContent = `Ocarina song ${t.cueN}. Play it through, then press Done.`;
+      const st = document.createElement("span"); st.className = "st"; st.textContent = STATE_LABEL[cueState(t)]; p.append(st);
+      const src = cueSource(t); if (src) p.append(document.createElement("br"), mineButton(src, "mine", "Play my take"));
+      box.append(p);
     }
     for (const l of t.lines) {
       const p = document.createElement("p");
       p.textContent = l.text.replace(/\*/g, "");
       const st = lineState(l);
+      const lab = document.createElement("span"); lab.className = "st"; lab.textContent = STATE_LABEL[st]; p.append(lab);
       if (st === "review" && l.entry.spoken) { const n = document.createElement("span"); n.className = "note"; n.textContent = `Last take said: “${l.entry.spoken}”`; p.append(n); }
       if (st === "unvoiced") { const n = document.createElement("span"); n.className = "note"; n.textContent = "Not in the manifest yet; run the voice notebook so this line gets its id."; p.append(n); }
+      const src = mineSource(l); if (src) p.append(mineButton(src, "mine", "Play my take"));
       box.append(p);
     }
     const band = cueBand(t);
@@ -789,6 +829,7 @@ registerProcessor("tne-tap", Tap);`;
     const turn = ep.turns.find(x => x.key === t.turnKey);
     if (!turn) return;
     t.ep = ep; t.turn = turn;
+    keepTakeAudio(t);
     const keys = turn.kind === "ocarina" ? [turn.key] : turn.lines.map(lineKey);
     for (const k of keys) ep.saved[k] = t.takeId;   // shown as saved now; written to this browser's list once it's on Drive
     if (!ep.demo) await idb.put("pending", `q:${t.takeId}`, { samples: t.samples, rate: t.rate, turnKey: t.turnKey, takeId: t.takeId,
@@ -903,6 +944,33 @@ registerProcessor("tne-tap", Tap);`;
     reviewPlayback = false; $("playTake").textContent = "Play take";
   }
 
+  // takes recorded in this page, kept in memory so they play back before (and without) a round trip to Drive
+  const takeAudio = new Map();
+  function keepTakeAudio(t) {
+    takeAudio.set(t.takeId, { samples: t.samples, rate: t.rate });
+    while (takeAudio.size > 40) takeAudio.delete(takeAudio.keys().next().value);
+  }
+  async function takeBuffer(takeId) {
+    const m = takeAudio.get(takeId);
+    if (m) { const b = audio.ctx.createBuffer(1, m.samples.length, m.rate); b.copyToChannel(m.samples, 0); return b; }
+    if (ep.demo) return null;
+    if (!ep.recordings) { const files = await drive.children(ep.id); ep.recordings = files.find(f => f.name === "recordings" && f.mimeType === FOLDER) || null; }
+    if (!ep.recordings) return null;
+    const f = (await drive.children(ep.recordings.id)).find(f => f.name.startsWith(takeId + ".") && !f.name.endsWith(".json"));
+    return f ? audio.ctx.decodeAudioData(await drive.bytes(f.id)) : null;
+  }
+  /** Play the narrator's own take for a line: the notebook's clip, or the raw take while it's waiting to be processed. */
+  async function playMine(src) {
+    if (mode !== "idle" && mode !== "review") return;
+    try {
+      await audio.output();
+      audio.stopPlayback();
+      const b = src.entry ? await fireflyBuffer(src.entry) : await takeBuffer(src.take);
+      if (!b) { banner("That take isn't on Drive yet. It plays once its upload finishes.", true); return; }
+      await audio.play(b);
+    } catch (e) { if (e instanceof AuthError) signInAgain(); else banner(`Couldn't play that take: ${e.message || e}`, true); }
+  }
+
   async function playCueOnly(item) {
     if (mode !== "idle" && mode !== "review") return;
     try {
@@ -944,6 +1012,7 @@ registerProcessor("tne-tap", Tap);`;
     const keys = turn.kind === "ocarina" ? [turn.key] : turn.lines.map(lineKey);
     for (const k of keys) ep.saved[k] = take.takeId;
     local.set(savedKey(), ep.saved);
+    keepTakeAudio(take);
     await idb.del("pending", "current");
     const demoLink = ep.demo;
     take = null;
@@ -1127,7 +1196,7 @@ NARRATOR: That one always helps me think.
     $("signin").addEventListener("click", async () => {
       try {
         await drive.auth();
-        $("signin").textContent = "Signed in"; $("signin").disabled = true;
+        $("signin").textContent = "Signed in"; $("signin").disabled = true; document.body.classList.add("signed-in");
         await loadEpisodeList();
         if (window.__tnePending && ep && ep.name !== window.__tnePending.episode) {
           const p = window.__tnePending; window.__tnePending = null;
@@ -1163,14 +1232,22 @@ NARRATOR: That one always helps me think.
     setInterval(meter, 100);
     setMode("idle");
     if (!CFG.clientId) $("signin").title = "Set clientId in config.js to sign in";
+    const setOpen = open => {
+      $("settings").hidden = !open;
+      $("settingsBtn").setAttribute("aria-expanded", String(open));
+      $("settingsBtn").textContent = open ? "Settings ▾" : "Settings ▴";
+      local.set("tne.settingsOpen", open);
+    };
+    setOpen(local.get("tne.settingsOpen", false));
+    $("settingsBtn").addEventListener("click", () => setOpen($("settings").hidden));
     const runOn = local.get("tne.runOn", true);
     $("runOn").checked = runOn;
     $("runOn").addEventListener("change", () => local.set("tne.runOn", $("runOn").checked));
     checkPending();
     if (CFG.clientId && drive.restore()) {
       // signed in within the hour: carry on without asking
-      $("signin").textContent = "Signed in"; $("signin").disabled = true;
-      loadEpisodeList().catch(e => { if (e instanceof AuthError) { $("signin").textContent = "Sign in with Google"; $("signin").disabled = false; } banner(e.message || String(e), true); });
+      $("signin").textContent = "Signed in"; $("signin").disabled = true; document.body.classList.add("signed-in");
+      loadEpisodeList().catch(e => { if (e instanceof AuthError) { $("signin").textContent = "Sign in with Google"; $("signin").disabled = false; document.body.classList.remove("signed-in"); } banner(e.message || String(e), true); });
     }
   }
 
