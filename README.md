@@ -37,7 +37,7 @@ To run it locally: `python3 -m http.server 8000` in this folder, then open `http
 
 ## Why full Drive access
 
-The recorder reads files the voice notebook created (the script, the manifest, the firefly's clips). Google's narrower per-app scope only sees files the app itself made, so it can't. It writes only new files into an episode's `recordings/` folder and never edits or deletes anything.
+The recorder reads files the voice notebook created (the script, the manifest, the firefly's clips). Google's narrower per-app scope only sees files the app itself made, so it can't. It writes only new takes into an episode's `recordings/` folder and its `flags.json` (one entry at a time, re-reading the file first), and never deletes anything.
 
 ## Recording notes
 
