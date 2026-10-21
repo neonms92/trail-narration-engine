@@ -242,11 +242,31 @@
 
   const lineKey = l => l.entry ? l.entry.id : "t:" + norm(l.text);
 
+  /** Lines whose latest take the notebook couldn't use: {line id: {take, message}}. A later take that worked clears it. */
+  function notebookFlags(manifest) {
+    const flags = {};
+    const takes = Object.entries(manifest.takes || {}).sort((a, b) => String(a[1].recorded).localeCompare(String(b[1].recorded)));
+    for (const [tid, t] of takes) {
+      if (t.kind === "ocarina") continue;
+      const issues = t.issues || [];
+      const silent = issues.find(i => i.kind === "take_silent");
+      const tagged = new Set(t.lines || []);
+      for (const i of issues) if (i.detail && i.detail.line) tagged.add(i.detail.line);
+      for (const id of tagged) {
+        if ((t.used || []).includes(id)) { delete flags[id]; continue; }
+        const miss = issues.find(i => i.detail && i.detail.line === id) || silent;
+        flags[id] = { take: tid, message: miss ? miss.message : "The notebook couldn't find this line in your take." };
+      }
+    }
+    return flags;
+  }
+
   function lineState(l) {
     if (!l.entry) return "unvoiced";
     const saved = ep.saved[lineKey(l)];
     const processed = saved && ep.manifest.takes && ep.manifest.takes[saved];
     if (saved && !processed) return "saved";
+    if (ep.flags[l.entry.id]) return "flagged";
     if (l.entry.source === "recording") return l.entry.needs_review ? "review" : "recorded";
     return "placeholder";
   }
@@ -256,8 +276,8 @@
     if (saved && !processed) return "saved";
     return (ep.manifest.cues || []).some(c => c.cue === t.cueN) ? "recorded" : "placeholder";
   }
-  const STATE_LABEL = { recorded: "recorded", saved: "saved, not processed yet", review: "needs review", placeholder: "not recorded", unvoiced: "not voiced yet: run the notebook" };
-  const needsTake = t => t.kind === "ocarina" ? cueState(t) === "placeholder" : t.lines.some(l => ["placeholder", "unvoiced"].includes(lineState(l)));
+  const STATE_LABEL = { flagged: "flagged by the notebook: take it again", recorded: "recorded", saved: "saved, not processed yet", review: "needs review", placeholder: "not recorded", unvoiced: "not voiced yet: run the notebook" };
+  const needsTake = t => t.kind === "ocarina" ? cueState(t) === "placeholder" : t.lines.some(l => ["placeholder", "unvoiced", "flagged"].includes(lineState(l)));
 
   // ---------- audio ----------
 
@@ -612,6 +632,7 @@ registerProcessor("tne-tap", Tap);`;
   function mineSource(l) {
     const st = lineState(l);
     if (st === "saved") return { take: ep.saved[lineKey(l)] };
+    if (st === "flagged") return { take: ep.flags[l.entry.id].take };   // hear what the notebook heard
     if ((st === "recorded" || st === "review") && l.entry.clip) return { entry: l.entry };
     return null;
   }
@@ -680,9 +701,8 @@ registerProcessor("tne-tap", Tap);`;
     // bring the open turn into view, with the firefly's line above it when there is one
     const cueRow = rail.querySelector(".item.cue-sel");
     const target = cueRow || panel;
-    // only when the selection moves, so an upload finishing doesn't yank the list while you browse it
-    const at = `${ep.name}:${sel}`;
-    if (target && at !== renderRail.at) { renderRail.at = at; requestAnimationFrame(() => target.scrollIntoView({ block: "start", behavior: "smooth" })); }
+    // only when the recorder moved the selection: never in answer to a tap, or to an upload finishing
+    if (target && scrollToSel) { scrollToSel = false; requestAnimationFrame(() => target.scrollIntoView({ block: "start", behavior: "smooth" })); }
   }
 
   function renderTurn() {
@@ -704,6 +724,11 @@ registerProcessor("tne-tap", Tap);`;
       const lab = document.createElement("span"); lab.className = "st"; lab.textContent = STATE_LABEL[st]; p.append(lab);
       if (st === "review" && l.entry.spoken) { const n = document.createElement("span"); n.className = "note"; n.textContent = `Last take said: “${l.entry.spoken}”`; p.append(n); }
       if (st === "unvoiced") { const n = document.createElement("span"); n.className = "note"; n.textContent = "Not in the manifest yet; run the voice notebook so this line gets its id."; p.append(n); }
+      if (st === "flagged") {
+        const n = document.createElement("span"); n.className = "note";
+        n.textContent = ep.flags[l.entry.id].message + (l.entry.source === "recording" ? " An earlier take is still in use." : "");
+        p.append(n);
+      }
       const src = mineSource(l); if (src) p.append(mineButton(src, "mine", "Play my take"));
       box.append(p);
     }
@@ -749,9 +774,11 @@ registerProcessor("tne-tap", Tap);`;
     if ($("mic")) $("mic").disabled = !(m === "idle" || m === "review");
   }
 
-  function select(i) {
+  let scrollToSel = true;   // set when the recorder moves the selection (run-on, opening an episode, arrow keys)
+  function select(i, scroll = false) {
     if (!ep || mode !== "idle" || i < 0 || i >= ep.turns.length) return;
     sel = i;
+    scrollToSel = scroll;
     local.set(`tne.turn.${ep.name}`, ep.turns[i].key);
     renderRail(); renderTurn();
   }
@@ -813,7 +840,7 @@ registerProcessor("tne-tap", Tap);`;
       setMode("idle");
       const next = ep.turns.findIndex((x, i) => i > sel && needsTake(x));
       if (next < 0) { select(sel); banner("That's the last line still to record."); return; }
-      select(next);
+      select(next, true);
       return startTake(false, false);   // the next line's firefly cue, the ding, and recording
     }
     await idb.put("pending", "current", { ...take, episode: ep.name, episodeId: ep.id, recorded: take.recorded.toISOString() });
@@ -1094,11 +1121,13 @@ registerProcessor("tne-tap", Tap);`;
     attachManifest(ep.items, e.manifest.lines || []);
     ep.turns = buildTurns(ep.items);
     ep.saved = local.get(savedKey(), {});
+    ep.flags = notebookFlags(e.manifest);
     ep.scriptSha1 = await sha1Hex(e.script);
     const lastKey = local.get(`tne.turn.${ep.name}`, null);
     let i = ep.turns.findIndex(t => t.key === lastKey);
     if (i < 0 || !needsTake(ep.turns[i])) { const n = ep.turns.findIndex(needsTake); i = n >= 0 ? n : Math.max(0, i); }
     sel = i;
+    scrollToSel = true;
     const unvoiced = ep.items.filter(it => it.type === "line" && it.speaker === "narrator" && !it.entry).length;
     renderRail(); renderTurn(); setMode("idle");
     if (unvoiced) banner(`${unvoiced} narrator line(s) were added after the last notebook run. Run it so they get their ids; you can still record them now.`);
@@ -1225,7 +1254,7 @@ NARRATOR: That one always helps me think.
       else if (e.key === "Enter" && mode === "review") { e.preventDefault(); save(true); }
       else if (e.key === "Backspace" && mode === "review") { e.preventDefault(); discard(); }
       else if (mode === "idle" && ep && (e.key === "ArrowDown" || e.key === "ArrowUp") && e.target.tagName !== "INPUT") {
-        e.preventDefault(); select(sel + (e.key === "ArrowDown" ? 1 : -1));
+        e.preventDefault(); select(sel + (e.key === "ArrowDown" ? 1 : -1), true);
       }
     });
     window.addEventListener("beforeunload", e => { if (mode === "recording" || mode === "saving" || uploads.list.length) { e.preventDefault(); e.returnValue = ""; } });
@@ -1235,7 +1264,6 @@ NARRATOR: That one always helps me think.
     const setOpen = open => {
       $("settings").hidden = !open;
       $("settingsBtn").setAttribute("aria-expanded", String(open));
-      $("settingsBtn").textContent = open ? "Settings ▾" : "Settings ▴";
       local.set("tne.settingsOpen", open);
     };
     setOpen(local.get("tne.settingsOpen", false));

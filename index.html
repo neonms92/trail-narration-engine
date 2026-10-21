@@ -75,6 +75,7 @@ main { overflow: auto; min-height: 0; }
 .item.claude { cursor: default; grid-template-columns: 18px 1fr; }
 .item .play.me { color: var(--moss); }
 .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--line); }
+.dot.flagged { background: var(--rec); }
 .dot.recorded { background: var(--ok); } .dot.saved { background: var(--glow); } .dot.review { background: var(--warn); }
 .dot.placeholder { background: var(--line); } .dot.unvoiced { background: transparent; border: 2px dashed var(--muted); }
 .play { border: 0; background: none; padding: 0; width: 18px; height: 18px; color: var(--firefly); font-size: 13px; line-height: 18px; }
@@ -102,11 +103,13 @@ footer { border-top: 1px solid var(--line); background: var(--panel);
   #big { min-height: 56px; min-width: 130px; }
 }
 body.signed-in #signin { display: none; }
-#settingsBtn { margin-left: auto; padding: 6px 10px; font-size: 14px; }
+#settingsBtn { margin-left: auto; padding: 0; width: 44px; height: 44px; display: inline-grid; place-items: center; color: var(--muted); }
+.readout { display: inline-flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+#uploads { flex: 1 1 0; min-width: 0; }
 #settingsBtn[aria-expanded="true"] { background: var(--field); }
 #settings { display: grid; gap: 10px; padding-top: 4px; border-top: 1px dashed var(--line); }
 #settings .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.transport { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.transport { display: flex; gap: 10px; align-items: center; }
 .runon { display: inline-flex; gap: 6px; align-items: center; }
 #big { min-width: 168px; min-height: 64px; font: 700 1.25rem var(--ui); border-radius: 14px; background: var(--moss); color: var(--panel); border-color: var(--moss); }
 #big.recording { background: var(--rec); border-color: var(--rec); }
@@ -182,10 +185,11 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
   <div class="transport">
     <button id="big" type="button" disabled>Take</button>
     <button id="retake" type="button" disabled>Retake <kbd>R</kbd></button>
-    <span class="sub" id="clock">0:00.0</span>
-    <span class="clip" id="clipLight"><i></i>Clip</span>
+    <span class="readout"><span class="sub" id="clock">0:00.0</span><span class="clip" id="clipLight"><i></i>Clip</span></span>
     <span class="sub" id="uploads" aria-live="polite"></span>
-    <button id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings">Settings ▴</button>
+    <button id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
   </div>
   <div class="meter">
     <div class="bar" aria-hidden="true"><div class="band" id="band"></div><div class="lvl" id="lvl"></div></div>
