@@ -1272,6 +1272,7 @@ NARRATOR: That one always helps me think.
       const o = e.target.selectedOptions[0];
       try { await openEpisode(o.value, o.textContent); } catch (err) { if (err instanceof AuthError) signInAgain(); else banner(err.message, true); }
     });
+    $("notebook").href = CFG.notebookUrl || "https://colab.research.google.com/github/neonms92/hiker-engine/blob/main/voice/breeze_voice.ipynb";
     $("play").innerHTML = ICON.play; $("stop").innerHTML = ICON.stop;
     $("play").addEventListener("click", () => playFrom(sel));
     $("rec").addEventListener("click", recPressed);

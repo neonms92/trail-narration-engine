@@ -123,6 +123,8 @@ body.signed-in #signin { display: none; }
 #settingsBtn[aria-expanded="true"] { background: var(--field); }
 #settings { display: grid; gap: 10px; padding-top: 4px; border-top: 1px dashed var(--line); }
 #settings .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.notebook-link { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); color: var(--ink); text-decoration: none; font-size: 14px; }
+.notebook-link:hover { border-color: var(--moss); }
 .transport { display: flex; gap: 10px; align-items: center; }
 .runon { display: inline-flex; gap: 6px; align-items: center; }
 .tbtn { width: 60px; height: 60px; padding: 0; border-radius: 50%; display: inline-grid; place-items: center; }
@@ -210,6 +212,12 @@ dialog .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 1
       <label for="mic" class="sub">Mic</label>
       <select id="mic" aria-describedby="micNote"><option value="">Automatic (headset first)</option></select>
       <span class="sub" id="micNote"></span>
+    </div>
+    <div class="row">
+      <a id="notebook" class="notebook-link" target="_blank" rel="noopener" title="Open the voice notebook in Colab">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M5 7H3M5 12H3M5 17H3"/><path d="M10.5 9.5v5l4-2.5z" fill="currentColor"/></svg>
+        <span>Colab: run the voice notebook</span>
+      </a>
     </div>
     <div class="knobs">
     <label for="gain">Gain</label><input id="gain" type="range" min="-12" max="12" step="0.5" value="0"><output id="gainOut">0.0 dB</output>
