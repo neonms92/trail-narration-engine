@@ -18,6 +18,8 @@ Keys: Space is Done while recording, otherwise Record (or Play where there's not
 
 **Flags.** Every line has a flag. A narrator line is flagged on its own when it has no take yet, or the notebook couldn't use its last one (not heard in the take, or a silent take); you can flag any other line to take it again, or clear a flag to skip a line. Tapping a firefly line's flag opens its direction, the mood's to start with, for editing: **Flag** asks the notebook to voice it again on a fresh seed with that direction, which then stays with the line; **Unflag** cancels the request, and on a line already voiced with your own direction, restores the mood's direction and its original take on the next run. Describe how it should sound rather than what not to do; pronunciation and wording are better fixed in the script.
 
+The script's `[cite N]` marks are on-screen citations, not words: the recorder leaves them out of the lines it shows and matches, as the voice notebook does.
+
 Line states in the script: blue recorded, green saved but not processed yet, orange needs review (you said it differently; see the report), red the notebook couldn't use the last take, grey not recorded, dashed not voiced yet (added to the script after the last notebook run; you can still record it, and the notebook matches it by text).
 
 The **Gain** slider (under the gear) is stored with each take for the mixer; it never changes the recording. Takes waiting to upload survive a reload.

@@ -188,6 +188,9 @@
 
   // ---------- the script ----------
 
+  /** A line as it is spoken: without its on-screen [cite N] marks (the compiler's rule). */
+  const spoken = text => text.replace(/\s*\[\s*cite\s+[0-9][0-9,\s]*?\s*\]/gi, "").replace(/[ \t]{2,}/g, " ").trim();
+
   /** Script items in order: sections, spoken lines, and ocarina songs (`> ocarina: play`). */
   function parseScript(text) {
     const items = [];
@@ -197,7 +200,7 @@
       if (!s || s.startsWith("#")) continue;
       let m;
       if ((m = s.match(/^==\s*(.*?)\s*==$/))) items.push({ type: "section", title: m[1] });
-      else if ((m = s.match(/^(NARRATOR|CLAUDE)\s*:\s*(.+)$/i))) items.push({ type: "line", speaker: m[1].toLowerCase() === "claude" ? "claude" : "narrator", text: m[2].trim() });
+      else if ((m = s.match(/^(NARRATOR|CLAUDE)\s*:\s*(.+)$/i))) items.push({ type: "line", speaker: m[1].toLowerCase() === "claude" ? "claude" : "narrator", text: spoken(m[2]) });
       else if ((m = s.match(/^>\s*ocarina\s*:\s*(play|playing)\b/i))) items.push({ type: "ocarina", cue: ++cue });
     }
     return items;
